@@ -17,7 +17,8 @@ async def main():
         print("-" * 50)
         
         user_query = "Conviene aprire un ristorante in via dei Calzaiuoli 50 a Firenze?"
-        
+        # user_query = "aprire ristorante"
+
         try:
             risultato = await client.call_tool("web_search", arguments={"query": user_query})
             print(f"[green]Risposta dal Server:[/green] {risultato} \n")
