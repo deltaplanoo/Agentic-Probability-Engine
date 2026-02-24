@@ -16,8 +16,7 @@ async def main():
         print(mcp_tools_list)
         print("-" * 50)
         
-        user_query = "Conviene aprire un ristorante in via dei Calzaiuoli 50 a Firenze?"
-        # user_query = "aprire ristorante"
+        user_query = "Should I open a restaurant in via dei Calzaiuoli 50 a Firenze?"
 
         try:
             risultato = await client.call_tool("web_search", arguments={"query": user_query})

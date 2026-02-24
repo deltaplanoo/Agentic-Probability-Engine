@@ -15,7 +15,7 @@ def web_search(query: str) -> str:
     Searches the web for information relevant to the decision.
     """
     print(f"[LOG SERVER] Searching key factors for decision: {query}")
-    extended_query = f"List key factors for the decision: {query}"
+    extended_query = f"Fattori per decidere: {query}"
 
     try:
         response = tavily.search(
