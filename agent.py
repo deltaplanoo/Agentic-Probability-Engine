@@ -1,6 +1,5 @@
 import os
 import asyncio
-import json
 from dotenv import load_dotenv
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -8,13 +7,19 @@ from fastmcp import Client
 from langgraph.prebuilt import ToolNode
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_core.tools import Tool
-
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+from langgraph.graph.message import add_messages
 
 load_dotenv()
 
 class AgentState(TypedDict):
-    messages: Annotated[list[BaseMessage], "The conversation messages"]
+    messages: Annotated[list[BaseMessage], add_messages]
+
+class WebSearchInput(BaseModel):
+    query: str = Field(description="The search query to look up")
+
+
 
 async def run_agent():
     async with Client("http://localhost:8000/sse") as mcp_client:
@@ -26,20 +31,16 @@ async def run_agent():
         
         for m_tool in raw_mcp_tools:
             def create_tool_wrapper(name):
-                async def wrapper(*args, **kwargs):
-                    if args:
-                        arguments = {"query": args[0]}
-                    else:
-                        arguments = kwargs
-                    result = await mcp_client.call_tool(name, arguments=arguments)
+                async def wrapper(query: str) -> str:
+                    result = await mcp_client.call_tool(name, arguments={"query": query})
                     return result.content[0].text
                 return wrapper
 
-            lc_tool = Tool(
+            lc_tool = StructuredTool.from_function(
                 name=m_tool.name,
                 description=m_tool.description,
-                func=None,
-                coroutine=create_tool_wrapper(m_tool.name)
+                coroutine=create_tool_wrapper(m_tool.name),
+                args_schema=WebSearchInput,
             )
             langchain_tools.append(lc_tool)
 
