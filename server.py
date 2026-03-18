@@ -46,12 +46,13 @@ def web_search(query: str) -> str:
 def process_decision_tree(tree_structure: str) -> str:
     """
     Calculates Italian Flag triplets (favor, neutral, unfavor) for every
-    non-leaf node using weighted averages of children, bottom-up to root.
+    non-leaf node by averaging children triplets, weighted only by node weight.
+    IF values themselves are plain probabilities — no internal weighting.
     """
     def calculate_node(node):
         children = node.get("children", [])
 
-        # Leaf: triplet already set, just return it
+        # Leaf: triplet already set, just return it as-is
         if not children:
             return (
                 node.get("favor",   0.0),
@@ -59,29 +60,22 @@ def process_decision_tree(tree_structure: str) -> str:
                 node.get("unfavor", 0.0),
             )
 
-        total_weight = 0.0
-        w_favor   = 0.0
-        w_neutral = 0.0
-        w_unfavor = 0.0
+        total_weight = sum(abs(child.get("weight", 0.0)) for child in children)
+
+        favor   = 0.0
+        neutral = 0.0
+        unfavor = 0.0
 
         for child in children:
             f, n, u = calculate_node(child)
-            w = abs(child.get("weight", 0.0))
-            w_favor   += f * w
-            w_neutral += n * w
-            w_unfavor += u * w
-            total_weight += w
+            w = abs(child.get("weight", 0.0)) / total_weight if total_weight > 0 else 1 / len(children)
+            favor   += f * w
+            neutral += n * w
+            unfavor += u * w
 
-        if total_weight > 0:
-            favor   = round(w_favor   / total_weight, 4)
-            neutral = round(w_neutral / total_weight, 4)
-            unfavor = round(w_unfavor / total_weight, 4)
-        else:
-            favor, neutral, unfavor = 0.0, 1.0, 0.0
-
-        node["favor"]   = favor
-        node["neutral"] = neutral
-        node["unfavor"] = unfavor
+        node["favor"]   = round(favor,   4)
+        node["neutral"] = round(neutral, 4)
+        node["unfavor"] = round(unfavor, 4)
         return favor, neutral, unfavor
 
     try:
