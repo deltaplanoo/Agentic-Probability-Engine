@@ -43,51 +43,46 @@ def web_search(query: str) -> str:
         return f"Error during Tavily search: {str(e)}"
     
 @mcp.tool()
-def generate_decision_tree(goal: str, factors: list[dict]) -> str:
-    """
-    Generates a structured decision tree for a specific goal.
-    'factors' should be a list of dicts with 'label' and 'weight' (-1 to +1).
-    """
-    tree = {
-        "decision": goal,
-        "criteria": factors,
-        "status": "initialized"
-    }
-    
-    #FIXME: save tree to db for faster retrieval later
-    return json.dumps(tree, indent=2)
-
-@mcp.tool()
 def process_decision_tree(tree_structure: str) -> str:
     """
-    Calculates the values of a decision tree from leaves to root using weighted averages.
-    Input must be a JSON string with: id, label, weight, value, children.
-    """   
+    Calculates Italian Flag triplets (favor, neutral, unfavor) for every
+    non-leaf node using weighted averages of children, bottom-up to root.
+    """
     def calculate_node(node):
         children = node.get("children", [])
-        
-        # if leaf: end recursion
+
+        # Leaf: triplet already set, just return it
         if not children:
-            return node.get("value", 0.0)
-        
-        weighted_sum = 0.0
-        sum_of_weights = 0.0
-        
+            return (
+                node.get("favor",   0.0),
+                node.get("neutral", 0.0),
+                node.get("unfavor", 0.0),
+            )
+
+        total_weight = 0.0
+        w_favor   = 0.0
+        w_neutral = 0.0
+        w_unfavor = 0.0
+
         for child in children:
-            child_value = calculate_node(child)
-            weight = child.get("weight", 0.0)
-            
-            weighted_sum += (child_value * weight)
-            sum_of_weights += abs(weight)
-            
-        # father node value
-        if sum_of_weights == 0:
-            node_value = 0.0
+            f, n, u = calculate_node(child)
+            w = abs(child.get("weight", 0.0))
+            w_favor   += f * w
+            w_neutral += n * w
+            w_unfavor += u * w
+            total_weight += w
+
+        if total_weight > 0:
+            favor   = round(w_favor   / total_weight, 4)
+            neutral = round(w_neutral / total_weight, 4)
+            unfavor = round(w_unfavor / total_weight, 4)
         else:
-            node_value = weighted_sum / sum_of_weights
-            
-        node["value"] = round(node_value, 4)
-        return node_value
+            favor, neutral, unfavor = 0.0, 1.0, 0.0
+
+        node["favor"]   = favor
+        node["neutral"] = neutral
+        node["unfavor"] = unfavor
+        return favor, neutral, unfavor
 
     try:
         data = json.loads(tree_structure)
