@@ -34,7 +34,7 @@ def web_search(query: str) -> str:
         formatted_output += "Detailed results:\n"
         
         for i, r in enumerate(results, 1):
-            # Tavily fornisce 'content', che è il testo estratto dalla pagina
+            # Tavily returns 'content' of webpage
             formatted_output += f"{i}. {r['title']}\n   Content: {r['content'][:300]}...\n\n"
             
         return formatted_output
@@ -66,7 +66,7 @@ def process_decision_tree(tree_structure: str) -> str:
     def calculate_node(node):
         children = node.get("children", [])
         
-        # if leaf end recursion
+        # if leaf: end recursion
         if not children:
             return node.get("value", 0.0)
         
@@ -80,7 +80,7 @@ def process_decision_tree(tree_structure: str) -> str:
             weighted_sum += (child_value * weight)
             sum_of_weights += abs(weight)
             
-        # Calcolo del valore del nodo padre (evitando divisione per zero)
+        # father node value
         if sum_of_weights == 0:
             node_value = 0.0
         else:
@@ -91,7 +91,7 @@ def process_decision_tree(tree_structure: str) -> str:
 
     try:
         data = json.loads(tree_structure)
-        calculate_node(data) # Modifica l'oggetto 'data' in-place
+        calculate_node(data)
         return json.dumps(data, indent=2)
     except Exception as e:
         return json.dumps({"error": f"Invalid tree structure: {str(e)}"})
