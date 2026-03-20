@@ -21,13 +21,14 @@ class AgentState(TypedDict):
     search_query: str
     search_results: str
     parameters: list[dict]
+    candidate_trees: list[dict]
     decision_tree: dict
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
 def make_nodes(model, mcp_client, search_tool):
 
-    # STEP 1: Reword the user question into an optimal search query
+    # STEP 1: reword user question to optimize search
     def reword_query(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a search query optimizer. "
@@ -41,13 +42,13 @@ def make_nodes(model, mcp_client, search_tool):
         print(f"\n[Step 1] Reworded query: {query}")
         return {"search_query": query}
 
-    # STEP 2: Call the web search tool once with the reworded query
+    # STEP 2: call web search tool after query is rephrased
     async def run_search(state: AgentState) -> dict:
         result = await search_tool.coroutine(query=state["search_query"])
         print(f"\n[Step 2] Search results received ({len(result)} chars)")
         return {"search_results": result}
 
-    # STEP 3: Extract parameters with IF triplets
+    # STEP 3: extract parameters with IF triplets
     def extract_and_score_parameters(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a business location analyst using the Italian Flag (IF) method.\n\n"
@@ -88,7 +89,7 @@ def make_nodes(model, mcp_client, search_tool):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             parameters = json.loads(raw)
 
-            # Normalize each triplet to guarantee sum = 1.0
+            # normalize triplets to get sum of 1
             for p in parameters:
                 total = p.get("favor", 0.0) + p.get("neutral", 0.0) + p.get("unfavor", 0.0)
                 if total > 0:
@@ -111,10 +112,11 @@ def make_nodes(model, mcp_client, search_tool):
         print(f"\n[Step 3] Extracted {len(parameters)} parameters with IF triplets")
         return {"parameters": parameters}
     
-    # STEP 4: Generate decision tree — weights only, IF blank on every node
-    def generate_decision_tree(state: AgentState) -> dict:
+    # STEP 4a: generate 3 candidate decision trees in parallel
+    async def generate_decision_trees(state: AgentState) -> dict:
         params_json = json.dumps(state["parameters"], indent=2)
-        system = SystemMessage(content=(
+        
+        tree_prompt_system = SystemMessage(content=(
             "You are a decision analysis expert.\n\n"
             "Build a weighted decision tree from the given parameters.\n\n"
             "Structure rules:\n"
@@ -150,23 +152,71 @@ def make_nodes(model, mcp_client, search_tool):
             "}\n"
             "Return ONLY valid JSON. No markdown, no explanation."
         ))
+
         human = HumanMessage(content=(
             f"Decision question: {state['original_question']}\n\n"
             f"Parameters to use as leaves:\n{params_json}"
         ))
+
+        async def single_generation(i: int):
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None, lambda: model.invoke([tree_prompt_system, human])
+            )
+            try:
+                raw = response.content.strip().replace("```json", "").replace("```", "")
+                tree = json.loads(raw)
+                print(f"\n[Step 4a] Candidate {i+1} generated")
+                return tree
+            except json.JSONDecodeError:
+                print(f"\n[Step 4a] Candidate {i+1} failed to parse")
+                return None
+
+        # parallel gen via asyncio.gather
+        candidates = await asyncio.gather(*[single_generation(i) for i in range(3)])
+        candidates = [c for c in candidates if c is not None]
+
+        print(f"\n[Step 4a] {len(candidates)} valid candidate trees generated")
+        return {"candidate_trees": candidates}
+
+
+    # STEP 4b: pick the best candidate tree
+    def pick_best_tree(state: AgentState) -> dict:
+        candidates = state["candidate_trees"]
+
+        if len(candidates) == 1:
+            print(f"\n[Step 4b] Only 1 valid candidate, using it directly")
+            return {"decision_tree": candidates[0]}
+
+        candidates_json = json.dumps(candidates, indent=2)
+        system = SystemMessage(content=(
+            "You are a decision analysis expert.\n\n"
+            "You will receive a list of candidate decision trees for the same question. "
+            "Pick the BEST one based on these criteria:\n\n"
+            "1. Coverage — does it include all relevant parameters as leaves?\n"
+            "2. Structure — are parameters grouped logically and meaningfully?\n"
+            "3. Weights — do sibling weights sum to 1.0 at every level? "
+            "Are weights sensibly distributed?\n"
+            "4. Depth — is the tree neither too flat nor unnecessarily deep?\n\n"
+            "Return ONLY the index (0, 1, or 2) of the best tree. "
+            "No explanation, no JSON, just the integer."
+        ))
+        human = HumanMessage(content=(
+            f"Decision question: {state['original_question']}\n\n"
+            f"Candidate trees:\n{candidates_json}"
+        ))
         response = model.invoke([system, human])
 
         try:
-            raw = response.content.strip().replace("```json", "").replace("```", "")
-            tree = json.loads(raw)
-        except json.JSONDecodeError:
-            tree = {}
+            best_index = int(response.content.strip())
+            best_index = max(0, min(best_index, len(candidates) - 1))  # clamp
+        except ValueError:
+            best_index = 0  # fallback
 
-        print(f"\n[Step 4] Decision tree structure generated (IF blank)")
-        print(json.dumps(tree, indent=2))
-        return {"decision_tree": tree}
+        print(f"\n[Step 4b] Best tree: candidate {best_index + 1}")
+        return {"decision_tree": candidates[best_index]}
 
-    # STEP 5: Score IF triplets on leaf nodes only, using parameters data
+    # STEP 5: score IF triplets on leaves only
     def score_leaf_if(state: AgentState) -> dict:
         tree_json  = json.dumps(state["decision_tree"], indent=2)
         params_json = json.dumps(state["parameters"], indent=2)
@@ -209,7 +259,7 @@ def make_nodes(model, mcp_client, search_tool):
         return {"decision_tree": tree}
 
 
-    # STEP 6: Send tree to MCP tool — propagates IF from leaves to root
+    # STEP 6: call MCP tool, propagates scores to root
     async def calculate_tree(state: AgentState) -> dict:
         tree_str = json.dumps(state["decision_tree"])
         result = await mcp_client.call_tool(
@@ -224,7 +274,7 @@ def make_nodes(model, mcp_client, search_tool):
             f"unfavor={root.get('unfavor','?')}")
         return {"decision_tree": calculated}
     
-    # STEP 7: Present final results
+    # STEP 7: print results
     def present_results(state: AgentState) -> dict:     # rounded for display only, 4 digits in actual data
         def if_bar(favor, neutral, unfavor, width=40):
             g = round(favor   * width)
@@ -249,7 +299,7 @@ def make_nodes(model, mcp_client, search_tool):
             else:
                 return "⚪ Uncertain"
 
-        # Extract all leaf nodes from the calculated tree
+        # extract all leaves from the calculated tree
         def collect_leaves(node):
             if not node.get("children"):
                 return [node]
@@ -285,7 +335,7 @@ def make_nodes(model, mcp_client, search_tool):
             if param.get("reasoning"):
                 print(f"    ↳ {param['reasoning']}\n")
 
-        # Root node
+        # root node
         rf = tree.get("favor",   0.0)
         rn = tree.get("neutral", 0.0)
         ru = tree.get("unfavor", 0.0)
@@ -305,7 +355,8 @@ def make_nodes(model, mcp_client, search_tool):
         reword_query,
         run_search,
         extract_and_score_parameters,
-        generate_decision_tree,
+        generate_decision_trees,
+        pick_best_tree,
         score_leaf_if,
         calculate_tree,
         present_results,
@@ -314,8 +365,10 @@ def make_nodes(model, mcp_client, search_tool):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 async def run_agent(question: str):
-    async with Client("http://localhost:8000/sse") as mcp_client:
+    mcp_client = Client("http://localhost:8000/sse")
+    await mcp_client.__aenter__()
 
+    try:
         raw_mcp_tools = await mcp_client.list_tools()
         print(f"Found {len(raw_mcp_tools)} MCP tools: {[t.name for t in raw_mcp_tools]}")
 
@@ -344,18 +397,19 @@ async def run_agent(question: str):
             reword_query,
             run_search,
             extract_and_score_parameters,
-            generate_decision_tree,
+            generate_decision_trees,
+            pick_best_tree,
             score_leaf_if,
             calculate_tree,
             present_results,
         ) = make_nodes(model, mcp_client, search_tool)
 
         workflow = StateGraph(AgentState)
-
         workflow.add_node("reword_query", reword_query)
         workflow.add_node("run_search", run_search)
         workflow.add_node("extract_and_score_parameters", extract_and_score_parameters)
-        workflow.add_node("generate_decision_tree", generate_decision_tree)
+        workflow.add_node("generate_decision_trees", generate_decision_trees)
+        workflow.add_node("pick_best_tree", pick_best_tree)
         workflow.add_node("score_leaf_if", score_leaf_if)
         workflow.add_node("calculate_tree", calculate_tree)
         workflow.add_node("present_results", present_results)
@@ -363,8 +417,9 @@ async def run_agent(question: str):
         workflow.add_edge(START, "reword_query")
         workflow.add_edge("reword_query", "run_search")
         workflow.add_edge("run_search", "extract_and_score_parameters")
-        workflow.add_edge("extract_and_score_parameters", "generate_decision_tree")
-        workflow.add_edge("generate_decision_tree", "score_leaf_if")
+        workflow.add_edge("extract_and_score_parameters", "generate_decision_trees")
+        workflow.add_edge("generate_decision_trees", "pick_best_tree")
+        workflow.add_edge("pick_best_tree", "score_leaf_if")
         workflow.add_edge("score_leaf_if", "calculate_tree")
         workflow.add_edge("calculate_tree", "present_results")
         workflow.add_edge("present_results", END)
@@ -377,8 +432,12 @@ async def run_agent(question: str):
             "search_query": "",
             "search_results": "",
             "parameters": [],
+            "candidate_trees": [],
             "decision_tree": {},
         })
+
+    finally:
+        await mcp_client.__aexit__(None, None, None)
 
 
 if __name__ == "__main__":
