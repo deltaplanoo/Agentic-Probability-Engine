@@ -4,15 +4,16 @@ Current workflow
 
 ```mermaid
 graph TD
-    START((START)) --> reword_query
-    present_results --> END((END))
+    START((START)) --> Node1
+    Node8 --> END((END))
 
-    reword_query[reword_query] --> run_search[run_search]
-    run_search --> extract_and_score_parameters[extract_and_score_parameters]
-    extract_and_score_parameters --> generate_decision_tree[generate_decision_tree]
-    generate_decision_tree --> score_leaf_if[score_leaf_if]
-    score_leaf_if --> calculate_tree[calculate_tree]
-    calculate_tree --> present_results[present_results]
+    Node1[1. Rephrase query] --> Node2[2. Run web search]
+    Node2 --> Node3[3. Extract and score parameters]
+    Node3 --> Node4[4. Generate decision trees]
+    Node4 --> Node5[5. Pick best tree]
+    Node5 --> Node6[6. Score IF leaf nodes]
+    Node6 --> Node7[7. Calculate tree]
+    Node7 --> Node8[8. Present results]
 
     %% Styling
     style START fill:#4caf50,stroke:#333,stroke-width:2px,color:#fff
