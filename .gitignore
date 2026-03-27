@@ -1,2 +1,4 @@
 /.env
 .venv
+/trees.db
+/__pycache__
