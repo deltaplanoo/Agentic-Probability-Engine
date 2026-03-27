@@ -61,3 +61,37 @@ def load_template(decision_type: str) -> dict | None:
         "variables": json.loads(row[0]),
         "tree":      json.loads(row[1])
     }
+
+def list_templates() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT decision_type, variables, created_at, updated_at "
+            "FROM decision_trees ORDER BY updated_at DESC"
+        ).fetchall()
+    return [
+        {
+            "decision_type": r[0],
+            "variables":     json.loads(r[1]),
+            "created_at":    r[2],
+            "updated_at":    r[3]
+        }
+        for r in rows
+    ]
+
+def print_templates():
+    templates = list_templates()
+    if not templates:
+        print("No templates saved yet.")
+        return
+
+    print(f"\n{'='*55}")
+    print(f" SAVED DECISION TREE TEMPLATES ({len(templates)} total)")
+    print(f"{'='*55}")
+
+    for t in templates:
+        print(f"\n  Decision type : {t['decision_type']}")
+        print(f"  Variables     : {', '.join(t['variables'])}")
+        print(f"  Created       : {t['created_at']}")
+        print(f"  Updated       : {t['updated_at']}")
+
+    print(f"\n{'='*55}\n")
