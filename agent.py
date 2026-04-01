@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+from docutils.nodes import label
 from dotenv import load_dotenv
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -19,8 +20,8 @@ load_dotenv()
 class AgentState(TypedDict):
     messages:          Annotated[list[BaseMessage], add_messages]
     original_question: str
-    decision_type:     str        # e.g. "open a restaurant"
-    variables:         dict       # e.g. {"address": "Via Roma 100 in Scandicci"}
+    decision_type:     str
+    variables:         dict
     search_query:      str
     search_results:    str
     parameters:        list[dict]
@@ -100,25 +101,22 @@ def make_nodes(model, mcp_client, search_tool):
         print(f"\n[Step 1] Decision type: '{decision_type}'")
         print(f"[Step 1] Variables: {variables}")
 
-        # Check DB for existing template
+        update = {
+            "decision_type": decision_type,
+            "variables":     variables,
+            "tree_reused":   False,
+        }
+
         template = load_template(decision_type)
         if template:
-            print(f"\n[Step 1] ✅ Template found in DB — injecting variables")
+            print(f"[Step 1] Template found for '{decision_type}' — reusing")
             injected_tree = inject_variables(template["tree"], variables)
-            return {
-                "decision_type": decision_type,
-                "variables":     variables,
-                "decision_tree": injected_tree,
-                "tree_reused":   True,
-            }
+            update["decision_tree"] = injected_tree
+            update["tree_reused"]   = True
         else:
-            print(f"\n[Step 1] No template found — will generate new one")
-            return {
-                "decision_type": decision_type,
-                "variables":     variables,
-                "decision_tree": {},
-                "tree_reused":   False,
-            }
+            print(f"[Step 1] No template found for '{decision_type}' — will generate")
+
+        return update
 
     # STEP 2: Reword question into search query (first-run only)
     def reword_query(state: AgentState) -> dict:
@@ -334,8 +332,6 @@ def make_nodes(model, mcp_client, search_tool):
         save_template(state["decision_type"], variable_names, annotated_tree)
         print(f"\n[Step 6] Template annotated and saved for '{state['decision_type']}'")
 
-        print_templates()
-
         # Re-inject variables so the current run uses concrete values
         injected_tree = inject_variables(annotated_tree, variables)
         return {"decision_tree": injected_tree}
@@ -471,9 +467,9 @@ def make_nodes(model, mcp_client, search_tool):
             f = leaf.get("favor",   0.0)
             n = leaf.get("neutral", 0.0)
             u = leaf.get("unfavor", 0.0)
-            bar   = if_bar(f, n, u)
+            bar   = if_bar(f, n, u, width=30)
             label = if_label(f, u)
-            print(f"  {leaf['label']:<26}  {f:>5.2f} {n:>5.2f} {u:>5.2f}  {bar}  {label}")
+            print(f"  {leaf['label'][:30]:<30} {f:>5.2f} {n:>5.2f} {u:>5.2f}  {bar}  {label}")
 
         rf = tree.get("favor",   0.0)
         rn = tree.get("neutral", 0.0)
@@ -482,9 +478,7 @@ def make_nodes(model, mcp_client, search_tool):
         print(f"\n{'='*65}")
         print(f" DECISION TREE RESULT")
         print(f"{'='*65}")
-        print(f"  Favor    {rf:.3f}  {if_bar(rf, 0,  0,  width=40)}")
-        print(f"  Neutral  {rn:.3f}  {if_bar(0,  rn, 0,  width=40)}")
-        print(f"  Unfavor  {ru:.3f}  {if_bar(0,  0,  ru, width=40)}")
+        print(f"\n  Favor: {rf:.4f}  Neutral: {rn:.4f}  Unfavor: {ru:.4f}")
         print(f"\n  Full flag:  {if_bar(rf, rn, ru, width=50)}")
         print(f"\n  VERDICT: {if_label(rf, ru)}")
         print(f"{'='*65}\n")
@@ -607,5 +601,5 @@ async def run_agent(question: str):
 
 if __name__ == "__main__":
     asyncio.run(run_agent(
-        "Is opening a restaurant in Via Calzaiuoli 50 in Florence a good idea?"
+        "Is opening a restaurant in Montelupo a good idea?"
     ))
