@@ -2,6 +2,7 @@ import json
 import os
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+import requests
 from tavily import TavilyClient
 
 load_dotenv()
@@ -41,6 +42,35 @@ def web_search(query: str) -> str:
 
     except Exception as e:
         return f"Error during Tavily search: {str(e)}"
+    
+@mcp.tool()
+def get_poi_nearby(category: str, lat: float, lon: float, radius: float = 0.5) -> str:
+    """
+    Retrieve Points of Interest (POIs) from Km4City within a specific radius.
+    The radius is expressed in kilometers (default 0.5 km).
+    """
+    base_url = "https://www.km4city.org/api/v1/get_location"
+    
+    params = {
+        "kind": category,
+        "lat": lat,
+        "lon": lon,
+        "r": radius,
+        "max_results": 50
+    }
+    
+    response = requests.get(base_url, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        pois = data.get("results", [])
+        if not pois:
+            return f"No POIs found for category '{category}' in this area."
+        
+        summary = [f"{p.get('name')} ({p.get('address')})" for p in pois]
+        return "\n".join(summary)
+    else:
+        return f"Error API Km4City: {response.status_code}"
     
 @mcp.tool()
 def process_decision_tree(tree_structure: str) -> str:
