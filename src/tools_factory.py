@@ -25,7 +25,7 @@ async def get_mcp_tools(mcp_client):
         search_term: str = Field(description="POI category or search term (e.g., Restaurant, Parking)")
         lat: float = Field(description="Latitude")
         lon: float = Field(description="Longitude")
-        max_dist_km: float = Field(default=2.0, description="Search radius in kilometers")
+        max_dist_km: float = Field(description="Search radius in kilometers")
 
     class ProcessTreeInput(BaseModel):
         tree_structure: str = Field(description="The JSON string of the decision tree to calculate")

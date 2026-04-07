@@ -89,5 +89,5 @@ async def run_agent(question: str):
 
 if __name__ == "__main__":
     asyncio.run(run_agent(
-        "Is opening a restaurant in Montelupo a good idea?"
+        "Is opening a restaurant in Montelupo Fiorentino a good idea?"
     ))

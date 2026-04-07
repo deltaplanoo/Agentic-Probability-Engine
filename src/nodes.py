@@ -30,7 +30,8 @@ def inject_variables(node: dict, variables: dict) -> dict:
     for key in ("label", "search_hint"):
         if key in node and isinstance(node[key], str):
             for var_name, var_value in variables.items():
-                node[key] = node[key].replace(f"{{{var_name}}}", var_value)
+                node[key] = node[key].replace(f"{{{var_name}}}", str(var_value))
+    
     node["children"] = [inject_variables(c, variables) for c in node.get("children", [])]
     return node
 
@@ -65,7 +66,7 @@ def make_nodes(model, mcp_client, tools):
     geo_tool    = tools["geocode_address"]
 
     # STEP 1: Parse question — extract decision_type + variables, check DB
-    def parse_question(state: AgentState) -> dict:
+    async def parse_question(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a decision analysis expert.\n\n"
             "Given a decision-making question, extract:\n"
@@ -103,6 +104,19 @@ def make_nodes(model, mcp_client, tools):
             "variables":     variables,
             "tree_reused":   False,
         }
+
+        if "address" in variables:
+            print(f"[Step 1] Geocoding: {variables['address']}")
+            try:
+                # Chiamata al tool geocode_address (geo_tool)
+                geo_res = await geo_tool.coroutine(address=variables["address"])
+                coords = json.loads(geo_res)
+                if "lat" in coords:
+                    variables["lat"] = coords["lat"]
+                    variables["lon"] = coords["lon"]
+                    print(f"[Step 1] Coordinates found: {coords['lat']}, {coords['lon']}")
+            except Exception as e:
+                print(f"[Step 1] Geocoding failed: {e}")
 
         template = load_template(decision_type)
         if template:
@@ -335,76 +349,98 @@ def make_nodes(model, mcp_client, tools):
 
     # STEP 7: Score IF on each leaf via individual targeted searches
     async def score_leaf_if(state: AgentState) -> dict:
-        tree     = state["decision_tree"]
-        leaves   = collect_leaves(tree)
+        tree = state["decision_tree"]
+        leaves = collect_leaves(tree)
         variables = state["variables"]
+        lat = variables.get("lat")
+        lon = variables.get("lon")
 
         print(f"\n[Step 7] Scoring {len(leaves)} leaves individually...")
 
         async def score_single_leaf(leaf: dict) -> tuple[str, float, float, float]:
-            leaf_id    = leaf["id"]
+            leaf_id = leaf["id"]
             leaf_label = leaf["label"]
-            hint       = leaf.get("search_hint", leaf_label)
+            hint = leaf.get("search_hint", leaf_label)
+            
+            # --- LOGICA DI SELEZIONE TOOL ---
+            # Chiediamo al modello se questa foglia riguarda la presenza fisica di POI
+            system_router = SystemMessage(content=(
+                "You are a tool router. Decide if this decision parameter requires a quantitative "
+                "count of physical places (POI) in a city, or general web information.\n"
+                "Return 'poi' ONLY for: Restaurants, Parking, Hospitals, Pharmacies, Schools, Banks, Transport stops.\n"
+                "Return 'web' for everything else (trends, rent prices, generic demographics, laws).\n"
+                "Return ONLY the word 'poi' or 'web'."
+            ))
+            human_router = HumanMessage(content=f"Parameter: {leaf_label}\nHint: {hint}")
+            
+            loop = asyncio.get_running_loop()
+            router_resp = await loop.run_in_executor(None, lambda: model.invoke([system_router, human_router]))
+            decision = router_resp.content.strip().lower()
 
-            # Search
-            try:
-                search_result = await search_tool.coroutine(query=hint)
-            except Exception:
-                search_result = ""
+            search_result = ""
+            
+            # Se è un POI e abbiamo le coordinate, usiamo Snap4City
+            if "poi" in decision and lat and lon:
+                # Estraiamo una categoria pulita (es: 'Restaurant')
+                system_cat = SystemMessage(content="Extract the POI category (single word) from the text. Example: 'Restaurant'. Return ONLY the word.")
+                cat_resp = await loop.run_in_executor(None, lambda: model.invoke([system_cat, human_router]))
+                category = cat_resp.content.strip()
+                
+                print(f"  [{leaf_label}] Quantitative Analysis via Snap4City for '{category}'...")
+                search_result = await poi_tool.coroutine(
+                    search_term=category, 
+                    lat=lat, 
+                    lon=lon, 
+                    max_dist_km=2.0 # Raggio di ricerca predefinito
+                )
+            else:
+                # Altrimenti ricerca web classica (Tavily)
+                print(f"  [{leaf_label}] Qualitative Analysis via Web Search...")
+                try:
+                    search_result = await search_tool.coroutine(query=hint)
+                except Exception:
+                    search_result = ""
 
+            # --- LOGICA DI SCORING (Invariata ma con dati più ricchi) ---
             if not search_result.strip():
-                print(f"  [{leaf_label}] No data — marking neutral")
                 return (leaf_id, 0.0, 1.0, 0.0)
 
-            # Score IF for this leaf
-            system = SystemMessage(content=(
+            system_score = SystemMessage(content=(
                 "You are a decision analyst using the Italian Flag (IF) method.\n\n"
-                "Given search results for a specific decision parameter, assign:\n"
-                "- 'favor': probability this supports the decision (0.0-1.0)\n"
-                "- 'neutral': probability this is uncertain/irrelevant (0.0-1.0)\n"
-                "- 'unfavor': probability this works against the decision (0.0-1.0)\n"
-                "- favor + neutral + unfavor MUST sum to exactly 1.0\n"
-                "- If data is missing or unclear, push into neutral\n\n"
-                "Return ONLY valid JSON: "
-                '{"favor": 0.0, "neutral": 0.0, "unfavor": 0.0}\n'
-                "No markdown, no explanation."
+                "Analyze the data (Web results or POI counts) to assign triplets.\n"
+                "If you see a 'Total count' from a city database, interpret it based on the decision.\n"
+                "Example: 300 restaurants might be BAD (high competition) for a new restaurant, "
+                "but GOOD for a parking business.\n\n"
+                "Return ONLY valid JSON: {'favor': 0.0, 'neutral': 0.0, 'unfavor': 0.0}"
             ))
-            human = HumanMessage(content=(
+            human_score = HumanMessage(content=(
                 f"Decision: {state['original_question']}\n"
                 f"Parameter: {leaf_label}\n\n"
-                f"Search results:\n{search_result}"
+                f"Data found:\n{search_result}"
             ))
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, lambda: model.invoke([system, human])
-            )
+            
+            response = await loop.run_in_executor(None, lambda: model.invoke([system_score, human_score]))
 
             try:
                 raw = response.content.strip().replace("```json", "").replace("```", "")
                 scored = json.loads(raw)
-                f = scored.get("favor",   0.0)
-                n = scored.get("neutral", 0.0)
-                u = scored.get("unfavor", 0.0)
+                f, n, u = scored.get("favor", 0.0), scored.get("neutral", 0.0), scored.get("unfavor", 0.0)
                 total = f + n + u
                 if total > 0:
                     f, n, u = round(f/total, 4), round(n/total, 4), round(u/total, 4)
                 else:
                     f, n, u = 0.0, 1.0, 0.0
-            except (json.JSONDecodeError, AttributeError):
+            except:
                 f, n, u = 0.0, 1.0, 0.0
 
-            print(f"  [{leaf_label}] favor={f} neutral={n} unfavor={u}")
             return (leaf_id, f, n, u)
 
-        # Run all leaf searches + scoring in parallel
         results = await asyncio.gather(*[score_single_leaf(leaf) for leaf in leaves])
 
-        # Update tree with scored IF values
         updated_tree = tree
         for leaf_id, f, n, u in results:
             updated_tree = update_leaf_in_tree(updated_tree, leaf_id, f, n, u)
 
-        print(f"\n[Step 7] All leaves scored")
         return {"decision_tree": updated_tree}
 
     # STEP 8: Propagate IF from leaves to root via MCP tool
