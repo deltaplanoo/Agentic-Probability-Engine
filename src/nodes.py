@@ -108,7 +108,6 @@ def make_nodes(model, mcp_client, tools):
         if "address" in variables:
             print(f"[Step 1] Geocoding: {variables['address']}")
             try:
-                # Chiamata al tool geocode_address (geo_tool)
                 geo_res = await geo_tool.coroutine(address=variables["address"])
                 coords = json.loads(geo_res)
                 if "lat" in coords:

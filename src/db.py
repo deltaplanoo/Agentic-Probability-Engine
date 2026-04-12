@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+from pick import pick
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "trees.db")
 
@@ -62,36 +63,57 @@ def load_template(decision_type: str) -> dict | None:
         "tree":      json.loads(row[1])
     }
 
-def list_templates() -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT decision_type, variables, created_at, updated_at "
-            "FROM decision_trees ORDER BY updated_at DESC"
-        ).fetchall()
-    return [
-        {
-            "decision_type": r[0],
-            "variables":     json.loads(r[1]),
-            "created_at":    r[2],
-            "updated_at":    r[3]
-        }
-        for r in rows
-    ]
-
 def print_templates():
-    templates = list_templates()
-    if not templates:
-        print("No templates saved yet.")
+    """
+    Displays an interactive menu to browse stored decision templates.
+    Once a template is selected, it prints its full JSON structure.
+    """
+    
+    if not os.path.exists(DB_PATH):
+        print(f"\n[DB ERROR] Database file '{DB_PATH}' not found.")
         return
 
-    print(f"\n{'='*55}")
-    print(f" SAVED DECISION TREE TEMPLATES ({len(templates)} total)")
-    print(f"{'='*55}")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
-    for t in templates:
-        print(f"\n  Decision type : {t['decision_type']}")
-        print(f"  Variables     : {', '.join(t['variables'])}")
-        print(f"  Created       : {t['created_at']}")
-        print(f"  Updated       : {t['updated_at']}")
+    try:
+        cursor.execute("SELECT decision_type FROM decision_trees")
+        rows = cursor.fetchall()
 
-    print(f"\n{'='*55}\n")
+        if not rows:
+            print("\n[DB INFO] No templates found in the database.")
+            return
+
+        options = [row[0] for row in rows]
+        title = "Select a decision template to inspect (Use arrows, press ENTER):"
+        
+        option, index = pick(options, title, indicator='=>', default_index=0)
+
+        cursor.execute("SELECT variables, tree FROM decision_trees WHERE decision_type = ?", (option,))
+        result = cursor.fetchone()
+
+        if result:
+            variables = result[0]
+            tree_obj = json.loads(result[1])
+
+            print(f"\n" + "█" * 80)
+            print(f" SELECTED TEMPLATE: {option.upper()}")
+            print(f" DEFINED VARIABLES: {variables}")
+            print("█" * 80 + "\n")
+            
+            print(json.dumps(tree_obj, indent=4))
+            
+            print("\n" + "█" * 80)
+            print(" End of Template View.")
+
+    except sqlite3.Error as e:
+        print(f"[DB ERROR] SQLite error: {e}")
+    except Exception as e:
+        print(f"[ERROR] Unexpected error during navigation: {e}")
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    print("--- Template in db ---")
+    print_templates()
