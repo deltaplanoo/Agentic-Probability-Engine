@@ -42,13 +42,13 @@ async def get_mcp_tools(mcp_client):
         "geocode_address": StructuredTool.from_function(
             name="geocode_address",
             description="Convert a location name or address into numerical coordinates (lat/lon)",
-            coroutine=make_wrapper("geocode_address"), # Deve matchare @mcp.tool()
+            coroutine=make_wrapper("geocode_address"),
             args_schema=GeocodeInput,
         ),
         "get_poi_nearby": StructuredTool.from_function(
             name="get_poi_nearby",
             description="Retrieve POI count from Snap4City near coordinates",
-            coroutine=make_wrapper("get_poi_nearby"), # Deve matchare @mcp.tool()
+            coroutine=make_wrapper("get_poi_nearby"),
             args_schema=GetPoiNearbyInput,
         ),
         "process_decision_tree": StructuredTool.from_function(

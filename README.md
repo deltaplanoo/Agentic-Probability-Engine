@@ -85,3 +85,9 @@ graph TD
     classDef leafNode fill:#fff,stroke:#999,stroke-dasharray: 5 5
     class leaf_foot,leaf_tour,leaf_econ,leaf_hist,leaf_social,leaf_rest_viab,leaf_horeca,leaf_comp,leaf_tourism_impact leafNode
 ```
+
+## To run
+1. Get API keys from Google Gemini, Tavily search and put them inside a `.env` file
+2. Install project's dependencies with `pip install -r requirements.txt`
+3. Run FastMCP server with `python server.py`
+4. Run agent with `python agent.py`
