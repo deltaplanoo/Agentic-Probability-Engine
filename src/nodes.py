@@ -317,7 +317,7 @@ def make_nodes(model, mcp_client, tools):
             "5. Do NOT add search_hint to intermediate or root nodes.\n\n"
             "Examples of correct search_hints:\n"
             "  Leaf 'Foot Traffic': search_hint = 'pedestrian foot traffic {address}'\n"
-            "  Leaf 'Competition': search_hint = 'restaurants near {address}'\n"
+            "  Leaf 'Restaurant competition': search_hint = 'restaurants near {address}'\n"
             "  Leaf 'Parking': search_hint = 'parking availability near {address}'\n"
             "  Leaf 'Rent': search_hint = 'commercial rent {address}'\n\n"
             "Return the complete updated tree as ONLY valid JSON. No markdown, no explanation."
@@ -335,14 +335,12 @@ def make_nodes(model, mcp_client, tools):
             print(f"\n[Step 6] Failed to parse annotated tree, using original")
             annotated_tree = state["decision_tree"]
 
-        # Extract variable names from the variables dict
         variable_names = list(variables.keys())
 
-        # Save parameterized template to DB
         save_template(state["decision_type"], variable_names, annotated_tree)
         print(f"\n[Step 6] Template annotated and saved for '{state['decision_type']}'")
 
-        # Re-inject variables so the current run uses concrete values
+        # re-inject variables
         injected_tree = inject_variables(annotated_tree, variables)
         return {"decision_tree": injected_tree}
 
@@ -361,8 +359,7 @@ def make_nodes(model, mcp_client, tools):
             leaf_label = leaf["label"]
             hint = leaf.get("search_hint", leaf_label)
             
-            # --- LOGICA DI SELEZIONE TOOL ---
-            # Chiediamo al modello se questa foglia riguarda la presenza fisica di POI
+            # --- TOOL ROUTING ---
             system_router = SystemMessage(content=(
                 "You are a tool router. Decide if this decision parameter requires a quantitative "
                 "count of physical places (POI) in a city, or general web information.\n"
@@ -378,9 +375,8 @@ def make_nodes(model, mcp_client, tools):
 
             search_result = ""
             
-            # Se è un POI e abbiamo le coordinate, usiamo Snap4City
+            # Snap4City
             if "poi" in decision and lat and lon:
-                # Estraiamo una categoria pulita (es: 'Restaurant')
                 system_cat = SystemMessage(content="Extract the POI category (single word) from the text. Example: 'Restaurant'. Return ONLY the word.")
                 cat_resp = await loop.run_in_executor(None, lambda: model.invoke([system_cat, human_router]))
                 category = cat_resp.content.strip()
@@ -390,17 +386,17 @@ def make_nodes(model, mcp_client, tools):
                     search_term=category, 
                     lat=lat, 
                     lon=lon, 
-                    max_dist_km=2.0 # Raggio di ricerca predefinito
+                    max_dist_km=0.5
                 )
+            # or classic web search
             else:
-                # Altrimenti ricerca web classica (Tavily)
                 print(f"  [{leaf_label}] Qualitative Analysis via Web Search...")
                 try:
                     search_result = await search_tool.coroutine(query=hint)
                 except Exception:
                     search_result = ""
 
-            # --- LOGICA DI SCORING (Invariata ma con dati più ricchi) ---
+            # --- SCORING LOGIC ---
             if not search_result.strip():
                 return (leaf_id, 0.0, 1.0, 0.0)
 
@@ -408,7 +404,7 @@ def make_nodes(model, mcp_client, tools):
                 "You are a decision analyst using the Italian Flag (IF) method.\n\n"
                 "Analyze the data (Web results or POI counts) to assign triplets.\n"
                 "If you see a 'Total count' from a city database, interpret it based on the decision.\n"
-                "Example: 300 restaurants might be BAD (high competition) for a new restaurant, "
+                "Example: 30 restaurants might be BAD (high competition) for a new restaurant, "
                 "but GOOD for a parking business.\n\n"
                 "Return ONLY valid JSON: {'favor': 0.0, 'neutral': 0.0, 'unfavor': 0.0}"
             ))
@@ -528,4 +524,3 @@ def make_nodes(model, mcp_client, tools):
         calculate_tree,
         present_results,
     )
-
