@@ -1,7 +1,6 @@
 Data-driven probability assestment agent.
 
-## Current workflow
-
+## Current workflow
 ```mermaid
 graph TD
     %% Entry Point
@@ -42,13 +41,13 @@ graph TD
     Display --> End((Final Decision))
     
     %% Styling
-    style CheckDB fill:#f9f,stroke:#333,stroke-width:2px
-    style Choice fill:#f9f,stroke:#333,stroke-width:2px
-    style Parallel_Generation fill:#e1f5fe,stroke:#01579b
-    style Leaf_Scoring fill:#f1f8e9,stroke:#33691e
+    style CheckDB fill:#535,stroke:#ccc,stroke-width:2px
+    style Choice fill:#535,stroke:#ccc,stroke-width:2px
+    style Parallel_Generation fill:#345,stroke:#ccc
+    style Leaf_Scoring fill:#543,stroke:#ccc
 ```
 
-## Tree Generation
+## Tree Generation
 The agent searches the web for key decision-making factors, builds the tree, assigns scores to the leaves, and propagates the weighted average up through the intermediate layers to the root node.
 
 Example: "Is opening a restaurant in Via Calzaiuoli 50 in Florence a good idea?"
@@ -87,7 +86,7 @@ graph TD
 ```
 
 ## To run
-1. Get API keys from Google Gemini, Tavily search and put them inside a `.env` file
+1. Get API keys from Google Gemini, Tavily search and put them inside a `.env` file, naming them `GOOGLE_API_KEY` and `TAVILY_API_KEY`
 2. Install project's dependencies with `pip install -r requirements.txt`
 3. Run FastMCP server with `python server.py`
 4. Run agent with `python agent.py`
