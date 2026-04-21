@@ -1,5 +1,7 @@
 .env
 .venv
 trees.db
-__pycache__
+__pycache__*
 GEMINI.md
+.DS_Store
+/src/data

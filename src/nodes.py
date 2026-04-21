@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from db import init_db, save_template, load_template, print_templates
+from session_store import save_template, load_template, print_templates
 
 load_dotenv()
 

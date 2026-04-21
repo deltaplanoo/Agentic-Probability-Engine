@@ -10,7 +10,6 @@ def route_after_parse(state: AgentState) -> str:
     return "score_leaf_if" if state.get("tree_reused") else "reword_query"
 
 async def run_agent(question: str):
-    init_db()
 
     mcp_client = Client("http://localhost:8000/sse")
     await mcp_client.__aenter__()
