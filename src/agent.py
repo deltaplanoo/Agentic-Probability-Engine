@@ -3,7 +3,8 @@ from nodes import *
 from fastmcp import Client
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
-from tools_factory import get_mcp_tools
+
+
 
 
 def route_after_parse(state: AgentState) -> str:
@@ -11,12 +12,10 @@ def route_after_parse(state: AgentState) -> str:
 
 async def run_agent(question: str):
 
-    mcp_client = Client("http://localhost:8000/sse")
+    mcp_client = Client("http://localhost:8000/mcp")
     await mcp_client.__aenter__()
 
     try:
-        mcp_tools = await get_mcp_tools(mcp_client)
-
         model = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=os.getenv("GOOGLE_API_KEY")
@@ -33,7 +32,7 @@ async def run_agent(question: str):
             score_leaf_if,
             calculate_tree,
             present_results,
-        ) = make_nodes(model, mcp_client, mcp_tools)
+        ) = make_nodes(model, mcp_client)
 
         workflow = StateGraph(AgentState)
 

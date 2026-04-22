@@ -59,11 +59,7 @@ def update_leaf_in_tree(node: dict, leaf_id: str, favor: float, neutral: float, 
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
-def make_nodes(model, mcp_client, tools):
-
-    search_tool = tools["web_search"] 
-    poi_tool    = tools["get_poi_nearby"]
-    geo_tool    = tools["geocode_address"]
+def make_nodes(model, mcp_client):
 
     # STEP 1: Parse question — extract decision_type + variables, check DB
     async def parse_question(state: AgentState) -> dict:
@@ -108,7 +104,8 @@ def make_nodes(model, mcp_client, tools):
         if "address" in variables:
             print(f"[Step 1] Geocoding: {variables['address']}")
             try:
-                geo_res = await geo_tool.coroutine(address=variables["address"])
+                mcp_res = await mcp_client.call_tool("geocode_address", arguments={"address": variables["address"]})
+                geo_res = mcp_res.content[0].text
                 coords = json.loads(geo_res)
                 if "lat" in coords:
                     variables["lat"] = coords["lat"]
@@ -144,7 +141,8 @@ def make_nodes(model, mcp_client, tools):
 
     # STEP 3: Global web search (first-run only)
     async def run_search(state: AgentState) -> dict:
-        result = await search_tool.coroutine(query=state["search_query"])
+        mcp_res = await mcp_client.call_tool("web_search", arguments={"query": state["search_query"]})
+        result = mcp_res.content[0].text
         print(f"\n[Step 3] Search results received ({len(result)} chars)")
         return {"search_results": result}
 
@@ -377,25 +375,31 @@ def make_nodes(model, mcp_client, tools):
             
             # Snap4City
             if "poi" in decision and lat and lon:
-                system_cat = SystemMessage(content="Extract the POI category (single word) from the text. Example: 'Restaurant'. Return ONLY the word.")
-                cat_resp = await loop.run_in_executor(None, lambda: model.invoke([system_cat, human_router]))
-                category = cat_resp.content.strip()
+                # FIXME: determine category or macrocategory
+                system_strat = SystemMessage(content=(
+                    "Decide if we need a specific 'category' (for direct competitors) "
+                    "or a 'macrocategory' (for synergy feeders like Tourism/Entertainment).\n"
+                    "Return JSON: {'type': 'category'|'macrocategory', 'name': 'Term'}"
+                ))
+                strat_resp = await loop.run_in_executor(None, lambda: model.invoke([system_strat, human_router]))
+                strat = json.loads(strat_resp.content.strip().replace("```json", "").replace("```", ""))
                 
-                print(f"  [{leaf_label}] Quantitative Analysis via Snap4City for '{category}'...")
-                search_result = await poi_tool.coroutine(
-                    search_term=category, 
-                    lat=lat, 
-                    lon=lon, 
-                    max_dist_km=0.5
+                print(f"  [{leaf_label}] Snap4City {strat['type']}: '{strat['name']}'")
+                
+                mcp_res = await mcp_client.call_tool(
+                    "get_poi_nearby", 
+                    arguments={
+                        "search_term": strat['name'], 
+                        "lat": lat, 
+                        "lon": lon, 
+                        "max_dist_km": 0.5
+                    }
                 )
-            # or classic web search
+                search_result = mcp_res.content[0].text
             else:
-                print(f"  [{leaf_label}] Qualitative Analysis via Web Search...")
-                try:
-                    search_result = await search_tool.coroutine(query=hint)
-                except Exception:
-                    search_result = ""
-
+                print(f"  [{leaf_label}] Web Search...")
+                mcp_res = await mcp_client.call_tool("web_search", arguments={"query": hint})
+                search_result = mcp_res.content[0].text
             # --- SCORING LOGIC ---
             if not search_result.strip():
                 return (leaf_id, 0.0, 1.0, 0.0)
