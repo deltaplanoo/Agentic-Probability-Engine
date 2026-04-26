@@ -407,7 +407,6 @@ def get_poi_categories(
     """
     try:
         categories_data = _read_dynamic_categories() # Legge service_categories.json
-        
         if not categories_data:
             return create_error("Error: POI Categories data file is missing or empty.")
             

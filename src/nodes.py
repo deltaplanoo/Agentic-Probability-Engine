@@ -82,16 +82,21 @@ def make_nodes(model, mcp_client):
             "1. 'decision_type': the generic decision being made, stripped of all specific "
             "values. Lowercase short phrase.\n"
             "   Examples:\n"
-            "   - 'Is opening a restaurant in Via Calzaiuoli 50 Florence a good idea?' "
+            "   - 'Is opening a restaurant in Via Calzaiuoli 50 Firenze a good idea?' "
             "→ 'open a restaurant'\n"
             "   - 'Should I open a gym in Berlin Mitte?' → 'open a gym'\n\n"
             "2. 'variables': a dict of named variable values extracted from the question.\n"
             "   Always include 'address' if a location is mentioned.\n"
-            "   Examples:\n"
-            "   - address: 'Via Calzaiuoli 50, Florence'\n"
-            "   - address: 'Berlin Mitte'\n\n"
+            "   Example: 'Via Calzaiuoli 50 Firenze'\n"
+            "   - address: 'Via Calzaiuoli 50 Firenze'\n"
+            "   - city: 'Firenze'\n"
+            "   - province: 'Firenze'\n"
+            "   Example: 'Gelatando Scandicci Firenze'\n"
+            "   - address: 'Gelatando'\n"
+            "   - city: 'Scandicci'\n"
+            "   - province: 'Firenze'\n"
             "Return ONLY valid JSON in this shape:\n"
-            '{"decision_type": "...", "variables": {"address": "..."}}\n'
+            '{"decision_type": "...", "variables": {"address": "..."}, "city": "...", "province": "..."}\n'
             "No markdown, no explanation."
         ))
         response = model.invoke([system, HumanMessage(content=state["original_question"])])
@@ -115,37 +120,55 @@ def make_nodes(model, mcp_client):
         }
 
         if "address" in variables:
-            address = variables["address"]
-            print(f"[Step 1] Geocoding via address_search_location: '{address}'")
+            address  = variables["address"]
+            city     = variables.get("city", "")
+            province = variables.get("province", "")
+            print(f"[Step 1] Geocoding via geocode_with_city: '{address}', city='{city}', province='{province}'")
             try:
-                mcp_res  = await mcp_client.call_tool(
-                    "address_search_location",
+                mcp_res = await mcp_client.call_tool(
+                    "geocode_with_city",
                     arguments={
-                        "search":     address,
-                        "logic":      "AND",
-                        "excludePOI": True,
-                        "maxresults": 5,
-                        "lang":       "it",
+                        "queries": [
+                            {
+                                "text":       address,
+                                "city":       city,
+                                "province":   province,
+                                "maxresults": 3,
+                            }
+                        ]
                     }
                 )
                 geo_data = json.loads(mcp_res.content[0].text)
-                error    = geo_data.get("error")
-                features = geo_data.get("results") or []
 
-                if error:
-                    print(f"[Step 1] Geocoding error: {error}")
-                elif features:
-                    # GeoJSON coordinates are [longitude, latitude]
-                    coords = features[0].get("geometry", {}).get("coordinates", [])
-                    if len(coords) >= 2:
-                        variables["lon"] = coords[0]
-                        variables["lat"] = coords[1]
-                        addr_label = features[0].get("properties", {}).get("address", address)
-                        print(f"[Step 1] Coordinates found: lat={coords[1]}, lon={coords[0]}  ({addr_label})")
-                    else:
-                        print(f"[Step 1] Geocoding: no coordinates in first feature")
+                # Top-level error (e.g. server failure)
+                top_error = geo_data.get("error")
+                if top_error:
+                    print(f"[Step 1] Geocoding top-level error: {top_error}")
                 else:
-                    print(f"[Step 1] Geocoding: no results returned for '{address}'")
+                    # geocode_with_city returns:
+                    #   {"results": [ {"text":..., "city":..., "results": [<GeoJSON features>], "error":...} ]}
+                    query_results = geo_data.get("results") or []
+                    if not query_results:
+                        print(f"[Step 1] Geocoding: empty results list")
+                    else:
+                        first_query = query_results[0]
+                        item_error  = first_query.get("error")
+                        features    = first_query.get("results") or []   # ← GeoJSON feature list
+
+                        if item_error:
+                            print(f"[Step 1] Geocoding error: {item_error}")
+                        elif not features:
+                            print(f"[Step 1] Geocoding: no features for '{address}' in '{city}'")
+                        else:
+                            # GeoJSON coordinates are [longitude, latitude]
+                            coords = features[0].get("geometry", {}).get("coordinates", [])
+                            if len(coords) >= 2:
+                                variables["lon"] = coords[0]
+                                variables["lat"] = coords[1]
+                                addr_label = features[0].get("properties", {}).get("address", address)
+                                print(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
+                            else:
+                                print(f"[Step 1] Geocoding: feature has no coordinates")
             except Exception as e:
                 print(f"[Step 1] Geocoding failed: {e}")
 
@@ -187,20 +210,19 @@ def make_nodes(model, mcp_client):
             "You are a business location analyst using the Italian Flag (IF) method.\n\n"
             "Given a decision-making question and search results about a specific location:\n\n"
             "1. Identify ALL parameters relevant to THIS specific decision.\n\n"
-            "2. For each parameter assign an Italian Flag triplet:\n"
+            "2. For each parameter assign a neutral Italian Flag triplet:\n"
             "   - 'favor': probability this parameter supports the decision (0.0-1.0)\n"
             "   - 'neutral': probability this is uncertain or irrelevant (0.0-1.0)\n"
             "   - 'unfavor': probability this works against the decision (0.0-1.0)\n"
             "   - favor + neutral + unfavor MUST sum to exactly 1.0\n"
-            "   - If data is missing, push into neutral\n\n"
-            "3. Sort parameters by favor descending.\n\n"
+            "   - this step is initialization only, IF triplets will be updated in later steps\n\n"
             "Return a JSON array:\n"
             '[\n'
             '  {\n'
             '    "parameter": "parameter name",\n'
             '    "value": "what you found",\n'
             '    "favor": 0.0,\n'
-            '    "neutral": 0.0,\n'
+            '    "neutral": 0.1,\n'
             '    "unfavor": 0.0,\n'
             '    "reasoning": "one sentence"\n'
             '  }\n'
@@ -217,14 +239,10 @@ def make_nodes(model, mcp_client):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             parameters = json.loads(raw)
             for p in parameters:
-                total = p.get("favor", 0.0) + p.get("neutral", 0.0) + p.get("unfavor", 0.0)
-                if total > 0:
-                    p["favor"]   = round(p["favor"]   / total, 4)
-                    p["neutral"] = round(p["neutral"] / total, 4)
-                    p["unfavor"] = round(p["unfavor"] / total, 4)
-                else:
-                    p["favor"], p["neutral"], p["unfavor"] = 0.0, 1.0, 0.0
-            parameters.sort(key=lambda p: -p.get("favor", 0.0))
+                p["parameter"] = p["parameter"].replace("\n", " ")
+                p["value"] = p["value"].replace("\n", " ")
+                p["reasoning"] = p["reasoning"].replace("\n", " ")
+
         except json.JSONDecodeError:
             parameters = [{
                 "parameter": "parse_error",
@@ -392,7 +410,7 @@ def make_nodes(model, mcp_client):
             try:
                 macro_res   = await mcp_client.call_tool("get_poi_categories", arguments={})
                 macro_data  = json.loads(macro_res.content[0].text)
-                macrocategories = macro_data.get("macrocategories", [])
+                macrocategories = macro_data.get("results") or macro_data.get("macrocategories") or []
                 print(f"[Step 6.5] Snap4City macrocategories available: {len(macrocategories)}")
             except Exception as e:
                 print(f"[Step 6.5] Could not load macrocategories ({e}); all leaves → web_search")
@@ -448,7 +466,7 @@ def make_nodes(model, mcp_client):
                     "get_poi_categories", arguments={"macro_category": chosen_macro}
                 )
                 sub_data  = json.loads(sub_res.content[0].text)
-                subcats   = sub_data.get("categories", [])
+                subcats   = sub_data.get("results") or sub_data.get("categories") or []
             except Exception as e:
                 print(f"  [{leaf_label}] → snap4city macrocategory '{chosen_macro}' (subcats fetch failed: {e})")
                 return leaf_id, {"tool": "snap4city", "snap4city_type": "macrocategory", "snap4city_cat": chosen_macro}
@@ -525,7 +543,7 @@ def make_nodes(model, mcp_client):
 
                 try:
                     mcp_res = await mcp_client.call_tool(
-                        "get_poi_nearby",
+                        "get_poi_nearby", # FIXME: use the new poi_search_near_gps_position tool (available in snap4agentic_advisor_experimental.py)
                         arguments={
                             "search_term": s4c_term,
                             "lat": lat,
