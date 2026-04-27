@@ -1698,6 +1698,7 @@ async def poi_search_near_gps_position(
         query_parts.append("fullCount=false")
 
         request_url = base_url + "?" + "&".join(query_parts)
+        print(f"Request URL: {request_url}")
 
         headers = {"Connection": "close"}
         if authentication:

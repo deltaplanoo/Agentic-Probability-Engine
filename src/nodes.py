@@ -482,7 +482,14 @@ def make_nodes(model, mcp_client):
                 f"Available subcategories:\n{chr(10).join(subcats)}\n\n"
                 "Pick the SINGLE subcategory that best represents the physical venues to count "
                 "for this leaf, EXACTLY as written.\n"
-                "If none of the subcategories is a good match, respond with NONE.\n"
+                "If none of the subcategories is a good match or the original macrocategory is the best match, respond with NONE.\n"
+                "Examples:\n"
+                "  - If leaf is close to 'pizzeria' and the macrocategory is 'WineAndFood', subcategory should be 'Pizzeria'.\n"
+                "  - If leaf is close to 'bar' and macrocategory is 'WineAndFood', subcategory should be 'Bar'.\n"
+                "  - If leaf is close to 'pub' and macrocategory is 'WineAndFood', subcategory should be 'Bar'.\n"
+                "  - If leaf is close to 'restaurants' and macrocategory is 'WineAndFood', subcategory should be 'Restaurant'.\n"
+                "  - If leaf is close to a generic 'shops' and macrocategory is 'ShoppingAndService', original macrocategory is the best match.\n"
+                "  - If leaf is close to a generic 'entertainment venues' and macrocategory is 'Entertainment', original macrocategory is the best match.\n"
                 "Return ONLY the subcategory name or NONE. No explanation."
             ))
             human_cat = HumanMessage(content=(
@@ -513,9 +520,9 @@ def make_nodes(model, mcp_client):
 
     # STEP 7: Score IF on each leaf using the tool chosen in Step 6.5
     # 2 scoring paths:
-    #   - web_search: sentiment analysis on textual results
+    #   - web_search: sentiment analysis on text results
     #   - snap4city:  POI count vs threshold comparison
-    POI_COUNT_THRESHOLD = 15 # FIXME: make it dynamic per category
+    POI_COUNT_THRESHOLD = 15
     async def score_leaf_if(state: AgentState) -> dict:
         tree      = state["decision_tree"]
         leaves    = collect_leaves(tree)
@@ -541,40 +548,43 @@ def make_nodes(model, mcp_client):
                 s4c_term = strategy.get("snap4city_cat", leaf_label)
                 print(f"  [{leaf_label}] Snap4City {s4c_type}: '{s4c_term}'")
 
+                poi_args = {
+                    "latitude":    lat,
+                    "longitude":   lon,
+                    "categories":  s4c_term,    # single category or macrocategory name
+                    "maxdistance": 0.5,         # 500 m radius
+                    "maxresults":  1000,
+                }
+
                 try:
-                    mcp_res = await mcp_client.call_tool(
-                        "get_poi_nearby", # FIXME: use the new poi_search_near_gps_position tool (available in snap4agentic_advisor_experimental.py)
-                        arguments={
-                            "search_term": s4c_term,
-                            "lat": lat,
-                            "lon": lon,
-                            "max_dist_km": 0.5,
-                        }
+                    mcp_res  = await mcp_client.call_tool(
+                        "poi_search_near_gps_position",
+                        arguments=poi_args
                     )
-                    raw_poi = mcp_res.content[0].text.strip()
+                    poi_data  = json.loads(mcp_res.content[0].text)
+                    poi_error = poi_data.get("error")
+                    if poi_error:
+                        print(f"    ✗ Snap4City error: {poi_error}, marking neutral")
+                        return (leaf_id, 0.0, 1.0, 0.0)
+
+                    poi_count = poi_data.get("count") or poi_data.get("fullCount") or len(poi_data.get("results") or [])
                 except Exception as e:
                     print(f"    ✗ Snap4City call failed ({e}), marking neutral")
                     return (leaf_id, 0.0, 1.0, 0.0)
 
-                if not raw_poi:
-                    print(f"    ✗ Empty Snap4City result, marking neutral")
-                    return (leaf_id, 0.0, 1.0, 0.0)
-
-                # Extract integer count from the result text
-                # Expected format: "Total count of '<term>' in the area: N"
-                count_match = re.search(r"(\d+)", raw_poi)
-                poi_count   = int(count_match.group(1)) if count_match else 0
                 print(f"    POI count: {poi_count} (threshold={POI_COUNT_THRESHOLD})")
 
-                # Ask the LLM whether a HIGH count is good or bad for this decision,
-                # then compute the IF triplet from the count ratio accordingly.
+                # ask LLM if a HIGH count has a positive or negative impact
+                # on the decision to compute the IF triplet accordingly
                 sys_ctx = SystemMessage(content=(
                     "You are a location decision analyst.\n\n"
                     "For the given decision and leaf parameter, answer with a single word:\n"
                     "  'POSITIVE' — if a HIGH count of nearby POIs is favorable for the decision\n"
-                    "               (e.g. many tourists → good for a restaurant)\n"
+                    "       (e.g. many tourists → good for a restaurant)\n"
+                    "       (e.g. many entertainment venues and cultural activity → good for a restaurant)\n"
+                    "       (e.g. many tourists → good for a restaurant)\n"
                     "  'NEGATIVE' — if a HIGH count is unfavorable\n"
-                    "               (e.g. many restaurants nearby → bad for opening a new one)\n"
+                    "       (e.g. many restaurants nearby → bad for opening a new one)\n"
                     "Return ONLY the word POSITIVE or NEGATIVE."
                 ))
                 human_ctx = HumanMessage(content=(
@@ -585,24 +595,19 @@ def make_nodes(model, mcp_client):
                     None, lambda: model.invoke([sys_ctx, human_ctx])
                 )
                 polarity = resp_ctx.content.strip().upper()
-                is_positive = "POSITIVE" in polarity   # HIGH count → favor
-
-                # Compute ratio: 0.0 = no POIs, 1.0 = at or above threshold
+                is_positive = "POSITIVE" in polarity
+                # ratio: 0.0 = no POIs, 1.0 = at or above threshold
                 ratio = min(poi_count / POI_COUNT_THRESHOLD, 1.0)
 
                 if is_positive:
-                    # More POIs → more favorable
                     f = round(ratio,           4)
-                    u = round((1.0 - ratio),   4)
-                    n = round(1.0 - f - u,     4)
+                    n = round(1.0 - f,         4)
+                    u = 0
                 else:
-                    # More POIs → more unfavorable (competition / saturation)
                     u = round(ratio,           4)
-                    f = round((1.0 - ratio),   4)
-                    n = round(1.0 - f - u,     4)
+                    n = round(1.0 - u,         4)
+                    f = 0
 
-                # Clamp neutral to [0, 1] in case of floating-point drift
-                n = max(n, 0.0)
                 print(f"    polarity={polarity}  favor={f}  neutral={n}  unfavor={u}")
                 return (leaf_id, f, n, u)
 
