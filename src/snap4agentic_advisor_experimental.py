@@ -407,7 +407,6 @@ def get_poi_categories(
     """
     try:
         categories_data = _read_dynamic_categories() # Legge service_categories.json
-        
         if not categories_data:
             return create_error("Error: POI Categories data file is missing or empty.")
             
@@ -1699,6 +1698,7 @@ async def poi_search_near_gps_position(
         query_parts.append("fullCount=false")
 
         request_url = base_url + "?" + "&".join(query_parts)
+        print(f"Request URL: {request_url}")
 
         headers = {"Connection": "close"}
         if authentication:

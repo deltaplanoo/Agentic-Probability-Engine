@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from dotenv import load_dotenv
 from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
@@ -57,6 +58,18 @@ def update_leaf_in_tree(node: dict, leaf_id: str, favor: float, neutral: float, 
     ]
     return node
 
+def update_leaf_scoring_strategy(node: dict, strategies: dict) -> dict:
+    """Recursively write scoring_strategy into each leaf whose id appears in strategies."""
+    node = dict(node)
+    if not node.get("children"):
+        if node["id"] in strategies:
+            node["scoring_strategy"] = strategies[node["id"]]
+        return node
+    node["children"] = [
+        update_leaf_scoring_strategy(c, strategies) for c in node["children"]
+    ]
+    return node
+
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
 def make_nodes(model, mcp_client):
@@ -69,16 +82,21 @@ def make_nodes(model, mcp_client):
             "1. 'decision_type': the generic decision being made, stripped of all specific "
             "values. Lowercase short phrase.\n"
             "   Examples:\n"
-            "   - 'Is opening a restaurant in Via Calzaiuoli 50 Florence a good idea?' "
+            "   - 'Is opening a restaurant in Via Calzaiuoli 50 Firenze a good idea?' "
             "→ 'open a restaurant'\n"
             "   - 'Should I open a gym in Berlin Mitte?' → 'open a gym'\n\n"
             "2. 'variables': a dict of named variable values extracted from the question.\n"
             "   Always include 'address' if a location is mentioned.\n"
-            "   Examples:\n"
-            "   - address: 'Via Calzaiuoli 50, Florence'\n"
-            "   - address: 'Berlin Mitte'\n\n"
+            "   Example: 'Via Calzaiuoli 50 Firenze'\n"
+            "   - address: 'Via Calzaiuoli 50 Firenze'\n"
+            "   - city: 'Firenze'\n"
+            "   - province: 'Firenze'\n"
+            "   Example: 'Gelatando Scandicci Firenze'\n"
+            "   - address: 'Gelatando'\n"
+            "   - city: 'Scandicci'\n"
+            "   - province: 'Firenze'\n"
             "Return ONLY valid JSON in this shape:\n"
-            '{"decision_type": "...", "variables": {"address": "..."}}\n'
+            '{"decision_type": "...", "variables": {"address": "..."}, "city": "...", "province": "..."}\n'
             "No markdown, no explanation."
         ))
         response = model.invoke([system, HumanMessage(content=state["original_question"])])
@@ -102,15 +120,55 @@ def make_nodes(model, mcp_client):
         }
 
         if "address" in variables:
-            print(f"[Step 1] Geocoding: {variables['address']}")
+            address  = variables["address"]
+            city     = variables.get("city", "")
+            province = variables.get("province", "")
+            print(f"[Step 1] Geocoding via geocode_with_city: '{address}', city='{city}', province='{province}'")
             try:
-                mcp_res = await mcp_client.call_tool("geocode_address", arguments={"address": variables["address"]})
-                geo_res = mcp_res.content[0].text
-                coords = json.loads(geo_res)
-                if "lat" in coords:
-                    variables["lat"] = coords["lat"]
-                    variables["lon"] = coords["lon"]
-                    print(f"[Step 1] Coordinates found: {coords['lat']}, {coords['lon']}")
+                mcp_res = await mcp_client.call_tool(
+                    "geocode_with_city",
+                    arguments={
+                        "queries": [
+                            {
+                                "text":       address,
+                                "city":       city,
+                                "province":   province,
+                                "maxresults": 3,
+                            }
+                        ]
+                    }
+                )
+                geo_data = json.loads(mcp_res.content[0].text)
+
+                # Top-level error (e.g. server failure)
+                top_error = geo_data.get("error")
+                if top_error:
+                    print(f"[Step 1] Geocoding top-level error: {top_error}")
+                else:
+                    # geocode_with_city returns:
+                    #   {"results": [ {"text":..., "city":..., "results": [<GeoJSON features>], "error":...} ]}
+                    query_results = geo_data.get("results") or []
+                    if not query_results:
+                        print(f"[Step 1] Geocoding: empty results list")
+                    else:
+                        first_query = query_results[0]
+                        item_error  = first_query.get("error")
+                        features    = first_query.get("results") or []   # ← GeoJSON feature list
+
+                        if item_error:
+                            print(f"[Step 1] Geocoding error: {item_error}")
+                        elif not features:
+                            print(f"[Step 1] Geocoding: no features for '{address}' in '{city}'")
+                        else:
+                            # GeoJSON coordinates are [longitude, latitude]
+                            coords = features[0].get("geometry", {}).get("coordinates", [])
+                            if len(coords) >= 2:
+                                variables["lon"] = coords[0]
+                                variables["lat"] = coords[1]
+                                addr_label = features[0].get("properties", {}).get("address", address)
+                                print(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
+                            else:
+                                print(f"[Step 1] Geocoding: feature has no coordinates")
             except Exception as e:
                 print(f"[Step 1] Geocoding failed: {e}")
 
@@ -150,26 +208,27 @@ def make_nodes(model, mcp_client):
     def extract_and_score_parameters(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a business location analyst using the Italian Flag (IF) method.\n\n"
-            "Given a decision-making question and search results about a specific location:\n\n"
-            "1. Identify ALL parameters relevant to THIS specific decision.\n\n"
-            "2. For each parameter assign an Italian Flag triplet:\n"
-            "   - 'favor': probability this parameter supports the decision (0.0-1.0)\n"
-            "   - 'neutral': probability this is uncertain or irrelevant (0.0-1.0)\n"
-            "   - 'unfavor': probability this works against the decision (0.0-1.0)\n"
-            "   - favor + neutral + unfavor MUST sum to exactly 1.0\n"
-            "   - If data is missing, push into neutral\n\n"
-            "3. Sort parameters by favor descending.\n\n"
+            "Given a decision-making question and initial web search results, identify ALL parameters "
+            "that are relevant to THIS specific decision.\n\n"
+            "IMPORTANT — the agent has exactly TWO tools available to score each parameter later:\n"
+            "  A) poi_search_near_gps_position  — counts physical venues/POIs near the location using the Snap4City database\n"
+            "                  e.g. 'number of nearby restaurants', 'number of parking lots within 500m'\n"
+            "  B) web_search — performs a targeted web search and runs sentiment analysis on the results\n"
+            "                  e.g. 'tourist foot traffic trends in Florence', 'average rent in Via Calzaiuoli'\n\n"
+            "For EACH parameter you must:\n"
+            "  1. Write the parameter name as a SHORT, concrete phrase optimised for both scoring tools.\n"
+            "  2. Set IF triplets neutral (favor, neutral, unfavor) = (0.0, 1.0, 0.0) (initialization only — they will be updated in later steps)\n\n"
             "Return a JSON array:\n"
             '[\n'
             '  {\n'
             '    "parameter": "parameter name",\n'
             '    "value": "what you found",\n'
             '    "favor": 0.0,\n'
-            '    "neutral": 0.0,\n'
+            '    "neutral": 1.0,\n'
             '    "unfavor": 0.0,\n'
-            '    "reasoning": "one sentence"\n'
-            '  }\n'
-            ']\n'
+            '    "reasoning": "one sentence explaining why this parameter matters"\n'
+            "  }\n"
+            "]\n"
             "Return ONLY valid JSON. No markdown, no explanation."
         ))
         human = HumanMessage(content=(
@@ -182,14 +241,10 @@ def make_nodes(model, mcp_client):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             parameters = json.loads(raw)
             for p in parameters:
-                total = p.get("favor", 0.0) + p.get("neutral", 0.0) + p.get("unfavor", 0.0)
-                if total > 0:
-                    p["favor"]   = round(p["favor"]   / total, 4)
-                    p["neutral"] = round(p["neutral"] / total, 4)
-                    p["unfavor"] = round(p["unfavor"] / total, 4)
-                else:
-                    p["favor"], p["neutral"], p["unfavor"] = 0.0, 1.0, 0.0
-            parameters.sort(key=lambda p: -p.get("favor", 0.0))
+                p["parameter"] = p["parameter"].replace("\n", " ")
+                p["value"] = p["value"].replace("\n", " ")
+                p["reasoning"] = p["reasoning"].replace("\n", " ")
+
         except json.JSONDecodeError:
             parameters = [{
                 "parameter": "parse_error",
@@ -214,6 +269,7 @@ def make_nodes(model, mcp_client):
             "- Leaf nodes = individual parameters\n"
             "- 'weight': importance among siblings (siblings must sum to 1.0)\n"
             "- Leave ALL favor/neutral/unfavor as 0.0 on every node\n"
+            "- Copy the 'reasoning' field from each parameter onto its corresponding leaf node\n"
             "- Do NOT add search_hint yet — leave it as empty string on leaves\n\n"
             "Use this exact JSON shape:\n"
             "{\n"
@@ -232,6 +288,7 @@ def make_nodes(model, mcp_client):
             '          "id": "leaf_1",\n'
             '          "label": "Parameter Name",\n'
             '          "search_hint": "",\n'
+            '          "reasoning": "",\n'
             '          "weight": 0.5,\n'
             '          "favor": 0.0, "neutral": 0.0, "unfavor": 0.0,\n'
             '          "children": []\n'
@@ -270,33 +327,51 @@ def make_nodes(model, mcp_client):
     def pick_best_tree(state: AgentState) -> dict:
         candidates = state["candidate_trees"]
         if len(candidates) == 1:
-            print(f"\n[Step 5b] Only 1 candidate, using directly")
-            return {"decision_tree": candidates[0]}
+            print(f"\n[Step 5b] Only 1 candidate generated, using directly")
+            best_tree = candidates[0]
+        else:
+            system = SystemMessage(content=(
+                "You are a decision analysis expert.\n\n"
+                "Pick the BEST decision tree from the candidates based on:\n"
+                "1. Coverage — all relevant parameters included as leaves\n"
+                "2. Structure — parameters grouped logically\n"
+                "3. Weights — siblings sum to 1.0, sensibly distributed\n"
+                "4. Depth — neither too flat nor too deep\n\n"
+                "Return ONLY the index (0, 1, or 2). No explanation, just the integer."
+            ))
+            human = HumanMessage(content=(
+                f"Decision question: {state['original_question']}\n\n"
+                f"Candidates:\n{json.dumps(candidates, indent=2)}"
+            ))
+            response = model.invoke([system, human])
 
-        system = SystemMessage(content=(
-            "You are a decision analysis expert.\n\n"
-            "Pick the BEST decision tree from the candidates based on:\n"
-            "1. Coverage — all relevant parameters included as leaves\n"
-            "2. Structure — parameters grouped logically\n"
-            "3. Weights — siblings sum to 1.0, sensibly distributed\n"
-            "4. Depth — neither too flat nor too deep\n\n"
-            "Return ONLY the index (0, 1, or 2). No explanation, just the integer."
-        ))
-        human = HumanMessage(content=(
-            f"Decision question: {state['original_question']}\n\n"
-            f"Candidates:\n{json.dumps(candidates, indent=2)}"
-        ))
-        response = model.invoke([system, human])
+            try:
+                best_index = int(response.content.strip())
+                best_index = max(0, min(best_index, len(candidates) - 1))
+            except ValueError:
+                best_index = 0
 
-        try:
-            best_index = int(response.content.strip())
-            best_index = max(0, min(best_index, len(candidates) - 1))
-        except ValueError:
-            best_index = 0
+            print(f"\n[Step 5b] Best tree: candidate {best_index + 1}")
+            best_tree = candidates[best_index]
 
-        print(f"\n[Step 5b] Best tree: candidate {best_index + 1}")
-        return {"decision_tree": candidates[best_index]}
+        reasoning_map = {
+            p["parameter"].lower().strip(): p.get("reasoning", "")
+            for p in state["parameters"]
+        }
 
+        def stamp_reasoning(node: dict) -> dict:
+            node = dict(node)
+            if not node.get("children"):
+                key = node.get("label", "").lower().strip()
+                if key in reasoning_map:
+                    node["reasoning"] = reasoning_map[key]
+            else:
+                node["children"] = [stamp_reasoning(c) for c in node["children"]]
+            return node
+
+        best_tree_with_reasoning = stamp_reasoning(best_tree)
+        return {"decision_tree": best_tree_with_reasoning}
+    
     # STEP 6: Annotate leaves with parameterized search_hints, then save template
     def annotate_and_save_template(state: AgentState) -> dict:
         tree_json = json.dumps(state["decision_tree"], indent=2)
@@ -342,97 +417,327 @@ def make_nodes(model, mcp_client):
         injected_tree = inject_variables(annotated_tree, variables)
         return {"decision_tree": injected_tree}
 
-    # STEP 7: Score IF on each leaf via individual targeted searches
+    # STEP 6.5: For each leaf, explore Snap4City categories via MCP to decide the scoring tool
+    async def plan_leaf_scoring(state: AgentState) -> dict:
+        tree       = state["decision_tree"]
+        leaves     = collect_leaves(tree)
+        variables  = state["variables"]
+        has_coords = "lat" in variables and "lon" in variables
+
+        print(f"\n[Step 6.5] Planning scoring strategy for {len(leaves)} leaves...")
+
+        # Fetch macrocategory list once — shared across all leaf planners
+        macrocategories: list[str] = []
+        if has_coords:
+            try:
+                macro_res   = await mcp_client.call_tool("get_poi_categories", arguments={})
+                macro_data  = json.loads(macro_res.content[0].text)
+                macrocategories = macro_data.get("results") or macro_data.get("macrocategories") or []
+                print(f"[Step 6.5] Snap4City macrocategories available: {len(macrocategories)}")
+            except Exception as e:
+                print(f"[Step 6.5] Could not load macrocategories ({e}); all leaves → web_search")
+
+        loop = asyncio.get_running_loop()
+
+        async def plan_single_leaf(leaf: dict) -> tuple[str, dict]:
+            """
+            Per-leaf agentic exploration:
+              1. LLM picks the most relevant macrocategory (or NONE).
+              2. Fetch subcategories for the chosen macrocategory via MCP tool.
+              3. LLM picks the closest subcategory (or falls back to macrocategory-level).
+              4. LLM validates whether the selected term is actually useful for this leaf.
+                 YES → keep snap4city   NO → fall back to web_search   MAYBE → LLM decides
+            """
+            leaf_id    = leaf["id"]
+            leaf_label = leaf["label"]
+            hint       = leaf.get("search_hint", leaf_label)
+
+            # ── Phase 1: decide if POI data is relevant + which macrocategory ──
+            if not has_coords or not macrocategories:
+                print(f"  [{leaf_label}] → web_search (no coords)")
+                return leaf_id, {"tool": "web_search"}
+
+            sys_macro = SystemMessage(content=(
+                "You are a data-source router for a location-decision system.\n\n"
+                "Decide whether the given decision leaf can be evaluated by COUNTING nearby physical "
+                "Places/POIs in a city using the Snap4City database.\n\n"
+                "Rules:\n"
+                "  - Answer 'NONE' if the leaf is about trends, prices, demographics, regulations, "
+                "sentiment or anything that cannot be answered by a POI count.\n"
+                "  - Otherwise, respond with the SINGLE most relevant macrocategory name from the list, "
+                "EXACTLY as written — do not invent names.\n\n"
+                f"Available macrocategories:\n{chr(10).join(macrocategories)}\n\n"
+                "Return ONLY the macrocategory name or the word NONE. No explanation."
+            ))
+            human_macro = HumanMessage(content=(
+                f"Decision: {state['original_question']}\n"
+                f"Leaf label: {leaf_label}\n"
+                f"Search hint: {hint}\n"
+                f"Reasoning: {leaf.get('reasoning', '')}"
+            ))
+
+            resp_macro = await loop.run_in_executor(
+                None, lambda: model.invoke([sys_macro, human_macro])
+            )
+            chosen_macro = resp_macro.content.strip().strip('"').strip("'")
+
+            if chosen_macro.upper() == "NONE" or chosen_macro not in macrocategories:
+                print(f"  [{leaf_label}] → web_search (no matching macrocategory)")
+                return leaf_id, {"tool": "web_search"}
+
+            # ── Phase 2: fetch subcategories for the chosen macrocategory ──
+            try:
+                sub_res   = await mcp_client.call_tool(
+                    "get_poi_categories", arguments={"macro_category": chosen_macro}
+                )
+                sub_data  = json.loads(sub_res.content[0].text)
+                subcats   = sub_data.get("results") or sub_data.get("categories") or []
+            except Exception as e:
+                print(f"  [{leaf_label}] subcats fetch failed ({e}), using macro")
+                subcats = []
+
+            # ── Phase 3: pick closest subcategory (or fall back to macro) ──
+            chosen_cat   = None
+            resolved_type = "macrocategory"
+            resolved_term = chosen_macro
+
+            if subcats:
+                sys_cat = SystemMessage(content=(
+                    f"You are matching a decision leaf to a Snap4City POI subcategory.\n\n"
+                    f"Macrocategory chosen: {chosen_macro}\n"
+                    f"Available subcategories:\n{chr(10).join(subcats)}\n\n"
+                    "Pick the SINGLE subcategory that best represents the physical venues to count "
+                    "for this leaf, EXACTLY as written.\n"
+                    "If none of the subcategories is a good match or the original macrocategory is the best match, respond with NONE.\n"
+                    "Examples:\n"
+                    "  - If leaf is close to 'pizzeria' and the macrocategory is 'WineAndFood', subcategory should be 'Pizzeria'.\n"
+                    "  - If leaf is close to 'bar' and macrocategory is 'WineAndFood', subcategory should be 'Bar'.\n"
+                    "  - If leaf is close to 'pub' and macrocategory is 'WineAndFood', subcategory should be 'Bar'.\n"
+                    "  - If leaf is close to 'restaurants' and macrocategory is 'WineAndFood', subcategory should be 'Restaurant'.\n"
+                    "  - If leaf is close to a generic 'shops' and macrocategory is 'ShoppingAndService', original macrocategory is the best match.\n"
+                    "  - If leaf is close to a generic 'entertainment venues' and macrocategory is 'Entertainment', original macrocategory is the best match.\n"
+                    "Return ONLY the subcategory name or NONE. No explanation."
+                ))
+                human_cat = HumanMessage(content=(
+                    f"Decision: {state['original_question']}\n"
+                    f"Leaf label: {leaf_label}\n"
+                    f"Search hint: {hint}\n"
+                    f"Reasoning: {leaf.get('reasoning', '')}"
+                ))
+
+                resp_cat   = await loop.run_in_executor(
+                    None, lambda: model.invoke([sys_cat, human_cat])
+                )
+                chosen_cat = resp_cat.content.strip().strip('"').strip("'")
+
+                if chosen_cat.upper() != "NONE" and chosen_cat in subcats:
+                    resolved_type = "category"
+                    resolved_term = chosen_cat
+                # else: stays macrocategory-level
+
+            # ── Phase 4: relevance validation ────────────────────────────────────
+            sys_rel = SystemMessage(content=(
+                "You are validating whether a Snap4City POI category is genuinely useful "
+                "for scoring a specific decision leaf.\n\n"
+                "Answer with exactly one of:\n"
+                "  YES    — the category directly measures or strongly correlates with the leaf\n"
+                "  NO     — the category is unrelated or only partially connected; "
+                           "a web search would provide better data\n\n"
+                "Examples:\n"
+                "  'Restaurant' vs 'Existing popular restaurants'  → YES\n"
+                "  'ShoppingAndService' vs 'Foot Traffic'          → NO\n"
+                "  'ShoppingAndService' vs 'Central location'      → NO\n"
+                "  'ShoppingAndService' vs 'Nearby shops'          → YES\n\n"
+                "Return ONLY the answer token(s). No explanation."
+            ))
+            human_rel = HumanMessage(content=(
+                f"Decision: {state['original_question']}\n"
+                f"Leaf label: {leaf_label}\n"
+                f"Selected Snap4City {resolved_type}: '{resolved_term}'\n"
+                f"Reasoning: {leaf.get('reasoning', '')}"
+            ))
+
+            resp_rel  = await loop.run_in_executor(
+                None, lambda: model.invoke([sys_rel, human_rel])
+            )
+            rel_answer = resp_rel.content.strip().upper()
+
+            if rel_answer.startswith("YES"):
+                keep_snap4city = True
+            else:
+                keep_snap4city = False
+
+            if not keep_snap4city:
+                print(f"  [{leaf_label}] → web_search ('{resolved_term}' not relevant: {rel_answer})")
+                return leaf_id, {"tool": "web_search"}
+
+            print(f"  [{leaf_label}] → snap4city {resolved_type} '{resolved_term}'  [relevance: {rel_answer}]")
+            return leaf_id, {
+                "tool":            "snap4city",
+                "snap4city_type":  resolved_type,
+                "snap4city_cat":   resolved_term,
+            }
+
+        # run all leaf planners in parallel
+        results = await asyncio.gather(*[plan_single_leaf(leaf) for leaf in leaves])
+        strategies = {leaf_id: strat for leaf_id, strat in results}
+
+        updated_tree = update_leaf_scoring_strategy(tree, strategies)
+        return {"decision_tree": updated_tree}
+
+    # STEP 7: Score IF on each leaf using the tool chosen in Step 6.5
+    # 2 scoring paths:
+    #   - web_search: sentiment analysis on text results
+    #   - snap4city:  POI count vs threshold comparison
+    POI_COUNT_THRESHOLD = 25
     async def score_leaf_if(state: AgentState) -> dict:
-        tree = state["decision_tree"]
-        leaves = collect_leaves(tree)
+        tree      = state["decision_tree"]
+        leaves    = collect_leaves(tree)
         variables = state["variables"]
         lat = variables.get("lat")
         lon = variables.get("lon")
 
         print(f"\n[Step 7] Scoring {len(leaves)} leaves individually...")
 
-        async def score_single_leaf(leaf: dict) -> tuple[str, float, float, float]:
-            leaf_id = leaf["id"]
-            leaf_label = leaf["label"]
-            hint = leaf.get("search_hint", leaf_label)
-            
-            # --- TOOL ROUTING ---
-            system_router = SystemMessage(content=(
-                "You are a tool router. Decide if this decision parameter requires a quantitative "
-                "count of physical places (POI) in a city, or general web information.\n"
-                "Return 'poi' ONLY for: Restaurants, Parking, Hospitals, Pharmacies, Schools, Banks, Transport stops.\n"
-                "Return 'web' for everything else (trends, rent prices, generic demographics, laws).\n"
-                "Return ONLY the word 'poi' or 'web'."
-            ))
-            human_router = HumanMessage(content=f"Parameter: {leaf_label}\nHint: {hint}")
-            
-            loop = asyncio.get_running_loop()
-            router_resp = await loop.run_in_executor(None, lambda: model.invoke([system_router, human_router]))
-            decision = router_resp.content.strip().lower()
+        loop = asyncio.get_running_loop()
 
-            search_result = ""
-            
-            # Snap4City
-            if "poi" in decision and lat and lon:
-                # FIXME: determine category or macrocategory
-                system_strat = SystemMessage(content=(
-                    "Decide if we need a specific 'category' (for direct competitors) "
-                    "or a 'macrocategory' (for synergy feeders like Tourism/Entertainment).\n"
-                    "Return JSON: {'type': 'category'|'macrocategory', 'name': 'Term'}"
+        async def score_single_leaf(leaf: dict) -> tuple[str, float, float, float]:
+            leaf_id    = leaf["id"]
+            leaf_label = leaf["label"]
+            hint       = leaf.get("search_hint", leaf_label)
+
+            strategy  = leaf.get("scoring_strategy", {"tool": "web_search"})
+            tool      = strategy.get("tool", "web_search")
+
+            # ── Snap4City ──────────────────────────────────────
+            if tool == "snap4city" and lat and lon:
+                s4c_type = strategy.get("snap4city_type", "category")
+                s4c_term = strategy.get("snap4city_cat", leaf_label)
+                print(f"  [{leaf_label}] Snap4City {s4c_type}: '{s4c_term}'")
+
+                poi_args = {
+                    "latitude":    lat,
+                    "longitude":   lon,
+                    "categories":  s4c_term,    # single category or macrocategory name
+                    "maxdistance": 0.5,         # 500 m radius
+                    "maxresults":  1000,
+                }
+
+                try:
+                    mcp_res  = await mcp_client.call_tool( 
+                        "poi_search_near_gps_position",
+                        arguments=poi_args
+                    )
+                    poi_data  = json.loads(mcp_res.content[0].text)
+                    poi_error = poi_data.get("error")
+                    if poi_error:
+                        print(f"    ✗ Snap4City error: {poi_error}, marking neutral")
+                        return (leaf_id, 0.0, 1.0, 0.0)
+
+                    poi_count = poi_data.get("count") or poi_data.get("fullCount") or len(poi_data.get("results") or [])
+                except Exception as e:
+                    print(f"    ✗ Snap4City call failed ({e}), marking neutral")
+                    return (leaf_id, 0.0, 1.0, 0.0)
+
+                print(f"    POI count: {poi_count} (threshold={POI_COUNT_THRESHOLD})")
+
+                # ask LLM if a HIGH count has a positive or negative impact
+                # on the decision to compute the IF triplet accordingly
+                sys_ctx = SystemMessage(content=(
+                    "You are a location decision analyst.\n\n"
+                    "For the given decision and leaf parameter, answer with a single word:\n"
+                    "  'POSITIVE' — if a HIGH count of nearby POIs is favorable for the decision\n"
+                    "       (e.g. many tourists → good for a restaurant)\n"
+                    "       (e.g. many entertainment venues and cultural activity → good for a restaurant)\n"
+                    "       (e.g. many tourists → good for a restaurant)\n"
+                    "  'NEGATIVE' — if a HIGH count is unfavorable\n"
+                    "       (e.g. many restaurants nearby → bad for opening a new one)\n"
+                    "Return ONLY the word POSITIVE or NEGATIVE."
                 ))
-                strat_resp = await loop.run_in_executor(None, lambda: model.invoke([system_strat, human_router]))
-                strat = json.loads(strat_resp.content.strip().replace("```json", "").replace("```", ""))
-                
-                print(f"  [{leaf_label}] Snap4City {strat['type']}: '{strat['name']}'")
-                
-                mcp_res = await mcp_client.call_tool(
-                    "get_poi_nearby", 
-                    arguments={
-                        "search_term": strat['name'], 
-                        "lat": lat, 
-                        "lon": lon, 
-                        "max_dist_km": 0.5
-                    }
+                human_ctx = HumanMessage(content=(
+                    f"Decision: {state['original_question']}\n"
+                    f"Leaf: {leaf_label} (searching for: {s4c_term})"
+                ))
+                resp_ctx = await loop.run_in_executor(
+                    None, lambda: model.invoke([sys_ctx, human_ctx])
                 )
-                search_result = mcp_res.content[0].text
+                polarity = resp_ctx.content.strip().upper()
+                is_positive = "POSITIVE" in polarity
+                # ratio: 0.0 = no POIs, 1.0 = at or above threshold
+                ratio = min(poi_count / POI_COUNT_THRESHOLD, 1.0)
+
+                if is_positive:
+                    f = round(ratio,           4)
+                    n = round((1.0 - f)/2,     4)
+                    u = round(1.0-f-n,         4)
+                else:
+                    u = round(ratio,           4)
+                    n = round((1.0 - u)/2,     4)
+                    f = round(1.0-u-n,         4)
+
+                print(f"    polarity={polarity}  favor={f}  neutral={n}  unfavor={u}")
+                return (leaf_id, f, n, u)
+
+            # ── PATH B: Web search + sentiment analysis ──────────────────────────
             else:
                 print(f"  [{leaf_label}] Web Search...")
-                mcp_res = await mcp_client.call_tool("web_search", arguments={"query": hint})
-                search_result = mcp_res.content[0].text
-            # --- SCORING LOGIC ---
-            if not search_result.strip():
-                return (leaf_id, 0.0, 1.0, 0.0)
+                try:
+                    mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
+                    web_result = mcp_res.content[0].text.strip()
+                    if not web_result or "timed out" in web_result.lower():
+                        mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
+                        web_result = mcp_res.content[0].text.strip()
+                except Exception as e:
+                    print(f"    ✗ Web search failed ({e}), marking neutral")
+                    return (leaf_id, 0.0, 1.0, 0.0)
 
-            system_score = SystemMessage(content=(
-                "You are a decision analyst using the Italian Flag (IF) method.\n\n"
-                "Analyze the data (Web results or POI counts) to assign triplets.\n"
-                "If you see a 'Total count' from a city database, interpret it based on the decision.\n"
-                "Example: 30 restaurants might be BAD (high competition) for a new restaurant, "
-                "but GOOD for a parking business.\n\n"
-                "Return ONLY valid JSON: {'favor': 0.0, 'neutral': 0.0, 'unfavor': 0.0}"
-            ))
-            human_score = HumanMessage(content=(
-                f"Decision: {state['original_question']}\n"
-                f"Parameter: {leaf_label}\n\n"
-                f"Data found:\n{search_result}"
-            ))
-            
-            response = await loop.run_in_executor(None, lambda: model.invoke([system_score, human_score]))
+                if not web_result:
+                    print(f"    ✗ Empty web result, marking neutral")
+                    return (leaf_id, 0.0, 1.0, 0.0)
 
-            try:
-                raw = response.content.strip().replace("```json", "").replace("```", "")
-                scored = json.loads(raw)
-                f, n, u = scored.get("favor", 0.0), scored.get("neutral", 0.0), scored.get("unfavor", 0.0)
-                total = f + n + u
-                if total > 0:
-                    f, n, u = round(f/total, 4), round(n/total, 4), round(u/total, 4)
-                else:
+                sys_sent = SystemMessage(content=(
+                    "You are a business analyst using the Italian Flag (IF) method.\n\n"
+                    "Perform a SENTIMENT ANALYSIS on the provided web search results "
+                    "to evaluate how this parameter affects the given decision.\n\n"
+                    "Guidelines:\n"
+                    "  - 'favor'   : evidence that clearly SUPPORTS the decision succeeding\n"
+                    "  - 'unfavor' : evidence that clearly OPPOSES or threatens the decision\n"
+                    "  - The three values MUST sum to exactly 1.0\n"
+                    "  - IMPORTANT: if you have any signal at all, commit to it — do NOT hide weak "
+                    "signals in neutral. A slight positive signal should be reflected in favor, "
+                    "a slight negative in unfavor. Reserve neutral ONLY for true absence of data.\n"
+                    "  - Typical split when data exists: neutral should rarely exceed 0.3\n\n"
+                    "Return ONLY valid JSON: "
+                    "{\"favor\": 0.0, \"neutral\": 0.0, \"unfavor\": 0.0, \"reasoning\": \"one sentence\"}"
+                ))
+
+                human_sent = HumanMessage(content=(
+                    f"Decision: {state['original_question']}\n"
+                    f"Parameter being evaluated: {leaf_label}\n\n"
+                    f"Web search results:\n{web_result}"
+                ))
+
+                resp_sent = await loop.run_in_executor(
+                    None, lambda: model.invoke([sys_sent, human_sent])
+                )
+
+                try:
+                    raw    = resp_sent.content.strip().replace("```json", "").replace("```", "")
+                    scored = json.loads(raw)
+                    f = scored.get("favor",   0.0)
+                    n = scored.get("neutral",  0.0)
+                    u = scored.get("unfavor",  0.0)
+                    total = f + n + u
+                    if total > 0:
+                        f, n, u = round(f/total, 4), round(n/total, 4), round(u/total, 4)
+                    else:
+                        f, n, u = 0.0, 1.0, 0.0
+                    reasoning = scored.get("reasoning", "")
+                    print(f"    favor={f}  neutral={n}  unfavor={u}  ← {reasoning}")
+                except Exception:
                     f, n, u = 0.0, 1.0, 0.0
-            except:
-                f, n, u = 0.0, 1.0, 0.0
 
-            return (leaf_id, f, n, u)
+                return (leaf_id, f, n, u)
 
         results = await asyncio.gather(*[score_single_leaf(leaf) for leaf in leaves])
 
@@ -524,6 +829,7 @@ def make_nodes(model, mcp_client):
         generate_decision_trees,
         pick_best_tree,
         annotate_and_save_template,
+        plan_leaf_scoring,
         score_leaf_if,
         calculate_tree,
         present_results,
