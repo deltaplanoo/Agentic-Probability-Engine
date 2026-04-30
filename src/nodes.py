@@ -589,7 +589,7 @@ def make_nodes(model, mcp_client):
     # 2 scoring paths:
     #   - web_search: sentiment analysis on text results
     #   - snap4city:  POI count vs threshold comparison
-    POI_COUNT_THRESHOLD = 25
+    POI_COUNT_THRESHOLD = 10
     async def score_leaf_if(state: AgentState) -> dict:
         tree      = state["decision_tree"]
         leaves    = collect_leaves(tree)
