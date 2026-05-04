@@ -112,14 +112,34 @@ async def run_full_validation(test_id: str, question: str):
 
 async def main():
     test_suite = [
-        # {
-        #     "id": "TC_01_CENTER",
-        #     "q": "Is opening a restaurant in Via Calzaiuoli 50 Firenze a good idea?"
-        # },
         {
-            "id": "TC_02_POI",
-            "q": "vale la pena aprire una gelateria a Scandicci vicino a Gelatando?"
-        }
+            "id": "TC_01_Address",
+            "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?"
+        },
+        {
+            "id": "TC_01_DifferentAddress",
+            "q": "conviene aprire un ristorante in ?"
+        },
+        {
+            "id": "TC_02_OtherCategory",
+            "q": "conviene aprire un hotel in Via Calzaiuoli 50 a Firenze?"
+        },
+        {
+            "id": "TC_03_POI",
+            "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?"
+        },
+        {
+            "id": "TC_04_Complex",
+            "q": "conviene aprire una pasticceria in Via Calzaiuoli 50 a Firenze?"
+        },
+        {
+            "id": "TC_05_NonExistentAddress", #FIXME: find a truly non-existent address to trigger geocoding failure
+            "q": "conviene aprire un ristorante in via Almeffini 12 a Firenze?"
+        },
+        {
+            "id": "TC_06_NonExistentPOI",
+            "q": "conviene aprire un ristorante vicino al Colosseo a Roma?"
+        },
     ]
 
     summary = []
@@ -128,7 +148,6 @@ async def main():
         summary.append((test["id"], "PASS" if success else "FAIL"))
 
     # Final Summary Table
-    print("\n" + "█"*50)
     print(f"{'TEST CASE ID':<35} | {'STATUS':<10}")
     print("-" * 50)
     for tid, status in summary:

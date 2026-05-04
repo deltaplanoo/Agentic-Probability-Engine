@@ -156,9 +156,9 @@ def make_nodes(model, mcp_client):
                         features    = first_query.get("results") or []   # ← GeoJSON feature list
 
                         if item_error:
-                            print(f"[Step 1] Geocoding error: {item_error}")
+                            raise ValueError(f"Geocoding tool error: {item_error}")
                         elif not features:
-                            print(f"[Step 1] Geocoding: no features for '{address}' in '{city}'")
+                            raise ValueError(f"Geocoding returned no features for '{address}' in '{city}'")
                         else:
                             # GeoJSON coordinates are [longitude, latitude]
                             coords = features[0].get("geometry", {}).get("coordinates", [])
@@ -168,7 +168,9 @@ def make_nodes(model, mcp_client):
                                 addr_label = features[0].get("properties", {}).get("address", address)
                                 print(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
                             else:
-                                print(f"[Step 1] Geocoding: feature has no coordinates")
+                                raise ValueError(f"Geocoding returned feature with no coordinates for '{address}' in '{city}' — cannot proceed without coordinates.")
+            except ValueError:
+                raise
             except Exception as e:
                 print(f"[Step 1] Geocoding failed: {e}")
 
