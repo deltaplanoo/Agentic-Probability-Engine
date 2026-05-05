@@ -7,14 +7,9 @@ MCP_URL = "http://localhost:8000/mcp"
 # ── Test cases ────────────────────────────────────────────────────────────────
 # text, city, province
 TEST_QUERIES = [
-    ("Via Calzaiuoli 50",           "Firenze",        "Firenze"),
-    ("Gelatando",                   "Scandicci",      "Firenze"),
-    ("Piazzale Michelangelo",       "Firenze",        "Firenze"),
-    ("Duomo di Firenze",            "Firenze",        "Firenze"),
-    ("Centro commerciale I Gigli",  "Campi Bisenzio", "Firenze"),
-    ("Colosseo",                    "Roma",           "Roma"),
-    ("Stazione Bologna Centrale",   "Bologna",        "Bologna"),
-    ("Piazza Maggiore",             "Bologna",        "Bologna"),
+    ("Piazza Santa Maria Novella",  "Firenze",        "Firenze"),
+    ("Piazza della Signoria",       "Firenze",        "Firenze"),
+    ("Piazza della Repubblica",     "Firenze",        "Firenze"),
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -117,27 +117,27 @@ async def main():
             "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?"
         },
         {
-            "id": "TC_01_DifferentAddress",
-            "q": "conviene aprire un ristorante in ?"
+            "id": "TC_02_DifferentAddress",
+            "q": "conviene aprire un ristorante in Piazza della Repubblica a Firenze?"
         },
         {
-            "id": "TC_02_OtherCategory",
+            "id": "TC_03_OtherCategory",
             "q": "conviene aprire un hotel in Via Calzaiuoli 50 a Firenze?"
         },
         {
-            "id": "TC_03_POI",
+            "id": "TC_04_POI",
             "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?"
         },
         {
-            "id": "TC_04_Complex",
+            "id": "TC_05_Complex",
             "q": "conviene aprire una pasticceria in Via Calzaiuoli 50 a Firenze?"
         },
         {
-            "id": "TC_05_NonExistentAddress", #FIXME: find a truly non-existent address to trigger geocoding failure
-            "q": "conviene aprire un ristorante in via Almeffini 12 a Firenze?"
+            "id": "TC_06_NonExistentAddress",
+            "q": "conviene aprire un ristorante in Piazza Santa Lucia 4 a Firenze?"
         },
         {
-            "id": "TC_06_NonExistentPOI",
+            "id": "TC_07_NonExistentPOI",
             "q": "conviene aprire un ristorante vicino al Colosseo a Roma?"
         },
     ]
