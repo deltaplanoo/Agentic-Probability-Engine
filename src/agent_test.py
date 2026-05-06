@@ -7,9 +7,9 @@ MCP_URL = "http://localhost:8000/mcp"
 # ── Test cases ────────────────────────────────────────────────────────────────
 # text, city, province
 TEST_QUERIES = [
-    ("Piazza Santa Maria Novella",  "Firenze",        "Firenze"),
-    ("Piazza della Signoria",       "Firenze",        "Firenze"),
-    ("Piazza della Repubblica",     "Firenze",        "Firenze"),
+    ("Corso Como",                   "Milano",   "Milano"),
+    # ("Piazza Napoleone 19",        "Lucca",     "Lucca"),
+    # ("Piazza San Michele",         "Lucca",     "Lucca"),
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,7 @@ async def run_test():
 
         raw = mcp_res.content[0].text
         data = json.loads(raw)
+        print(f"[DEBUG] Raw MCP response data:\n{json.dumps(data, indent=2)}\n")
 
         top_error = data.get("error")
         if top_error:

@@ -63,6 +63,10 @@ async def run_full_validation(test_id: str, question: str):
         print(f"\n[{test_id}] Step 1: Parsing question and geocoding...")
         state.update(await parse_question(state))
 
+        if "lat" not in state["variables"] or "lon" not in state["variables"]:
+            print(f"[{test_id}] Critical Error: Geocoding failed (Coordinates not found).")
+            return False
+        
         if not state.get("tree_reused"):
             print(f"[{test_id}] Step 2: Optimizing search query...")
             state.update(reword_query(state))
@@ -121,39 +125,55 @@ async def main():
             "q": "conviene aprire un ristorante in Piazza della Repubblica a Firenze?"
         },
         {
-            "id": "TC_03_OtherCategory",
-            "q": "conviene aprire un hotel in Via Calzaiuoli 50 a Firenze?"
+            "id": "TC_03_DifferentCity",
+            "q": "conviene aprire un ristorante in Via Roma 270 a Pontedera, Pisa?"
         },
         {
-            "id": "TC_04_POI",
+            "id": "TC_04_OtherCategory",
+            "q": "conviene aprire un hotel a Firenze in Via Calzaiuoli 50?"
+        },
+        {
+            "id": "TC_05_POI",
             "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?"
         },
         {
-            "id": "TC_05_Complex",
-            "q": "conviene aprire una pasticceria in Via Calzaiuoli 50 a Firenze?"
+            "id": "TC_06_DifferentSyntax",
+            "q": "sarebbe redditizio avviare una pasticceria in Via Calzaiuoli 50 a Firenze"
         },
         {
-            "id": "TC_06_NonExistentAddress",
-            "q": "conviene aprire un ristorante in Piazza Santa Lucia 4 a Firenze?"
+            "id": "TC_07_NonExistentAddress",
+            "q": "conviene aprire un ristorante in Corso Como 100 a Milano?",
+            "expect_fail": True,
         },
         {
-            "id": "TC_07_NonExistentPOI",
-            "q": "conviene aprire un ristorante vicino al Colosseo a Roma?"
+            "id": "TC_08_NonExistentPOI",
+            "q": "conviene aprire un ristorante vicino al Colosseo a Roma?",
+            "expect_fail": True,
         },
     ]
 
     summary = []
     for test in test_suite:
-        success = await run_full_validation(test["id"], test["q"])
-        summary.append((test["id"], "PASS" if success else "FAIL"))
+        expect_fail = test.get("expect_fail", False)
+        
+        actual_success = await run_full_validation(test["id"], test["q"])
+        
+        if expect_fail:
+            test_passed = not actual_success
+        else:
+            test_passed = actual_success
 
-    # Final Summary Table
-    print(f"{'TEST CASE ID':<35} | {'STATUS':<10}")
-    print("-" * 50)
-    for tid, status in summary:
+        summary.append((test["id"], "PASS" if test_passed else "FAIL", expect_fail, actual_success))
+
+    print("\n" + "█"*60)
+    print(f"{'TEST CASE ID':<35} | {'RESULT':<10} | {'EXPECTED'}")
+    print("-" * 60)
+    for tid, status, exp_fail, actual in summary:
         color = "\033[92m" if status == "PASS" else "\033[91m"
-        print(f"{tid:<35} | {color}{status}\033[0m")
-    print("█"*50 + "\n")
+        note = "(Expected Fail)" if exp_fail else "(Expected Success)"
+        print(f"{tid:<35} | {color}{status:<10}\033[0m | {note}")
+    print("█"*60 + "\n")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

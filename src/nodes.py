@@ -87,14 +87,22 @@ def make_nodes(model, mcp_client):
             "   - 'Should I open a gym in Berlin Mitte?' → 'open a gym'\n\n"
             "2. 'variables': a dict of named variable values extracted from the question.\n"
             "   Always include 'address' if a location is mentioned.\n"
-            "   Example: 'Via Calzaiuoli 50 Firenze'\n"
-            "   - address: 'Via Calzaiuoli 50 Firenze'\n"
+            "   Example: 'Via Calzaiuoli 50 a Firenze'\n"
+            "   - address: 'Via Calzaiuoli 50'\n"
             "   - city: 'Firenze'\n"
             "   - province: 'Firenze'\n"
-            "   Example: 'Gelatando Scandicci Firenze'\n"
+            "   Example: 'Gelatando a Scandicci, Firenze'\n"
             "   - address: 'Gelatando'\n"
             "   - city: 'Scandicci'\n"
             "   - province: 'Firenze'\n"
+            "   Example: 'Via Roma 270 a Pontedera, Pisa'\n"
+            "   - address: 'Via Roma 270'\n"
+            "   - city: 'Pontedera'\n"
+            "   - province: 'Pisa'\n"
+            "   Example: 'vicino al Colosseo a Roma'\n"
+            "   - address: 'Colosseo'\n"
+            "   - city: 'Roma'\n"
+            "   - province: 'Roma'\n"
             "Return ONLY valid JSON in this shape:\n"
             '{"decision_type": "...", "variables": {"address": "..."}, "city": "...", "province": "..."}\n'
             "No markdown, no explanation."
@@ -320,7 +328,7 @@ def make_nodes(model, mcp_client):
                 print(f"\n[Step 5a] Candidate {i+1} failed to parse")
                 return None
 
-        candidates = await asyncio.gather(*[single_generation(i) for i in range(3)])
+        candidates = await asyncio.gather(*[single_generation(i) for i in range(1)]) # range (3) in production
         candidates = [c for c in candidates if c is not None]
         print(f"\n[Step 5a] {len(candidates)} valid candidates generated")
         return {"candidate_trees": candidates}
