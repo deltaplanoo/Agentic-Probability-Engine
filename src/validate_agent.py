@@ -31,20 +31,6 @@ async def run_full_validation(test_id: str, question: str):
             google_api_key=os.getenv("GOOGLE_API_KEY")
         )
 
-        (
-            parse_question,
-            reword_query,
-            run_search,
-            extract_and_score_parameters,
-            generate_decision_trees,
-            pick_best_tree,
-            annotate_and_save_template,
-            plan_leaf_scoring,
-            score_leaf_if,
-            calculate_tree,
-            present_results,
-        ) = make_nodes(model, mcp_client)
-
         state: AgentState = {
             "messages": [HumanMessage(content=question)],
             "original_question": question,
@@ -57,8 +43,7 @@ async def run_full_validation(test_id: str, question: str):
             "decision_tree": {},
             "tree_reused": False,
         }
-
-        # TEST FLOW
+        # TODO refactor to use the builder.py app
 
         print(f"\n[{test_id}] Step 1: Parsing question and geocoding...")
         state.update(await parse_question(state))
