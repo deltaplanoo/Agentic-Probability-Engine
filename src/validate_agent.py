@@ -1,13 +1,18 @@
 import asyncio
 import os
-import traceback
+import json
+import logging #
 from dotenv import load_dotenv
 from fastmcp import Client
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from builder import create_agent_app
 
+logging.basicConfig(level=logging.WARNING)
+
 load_dotenv()
+
+WATCH_LIST = ["TC_01_Address", "TC_08_NonExistentPOI"]
 
 async def run_full_validation(test_id: str, question: str) -> bool:
     print(f"\n" + "═"*80)
@@ -26,7 +31,7 @@ async def run_full_validation(test_id: str, question: str) -> bool:
 
         app = create_agent_app(model, mcp_client)
 
-        await app.ainvoke({
+        inputs = {
             "messages":          [HumanMessage(content=question)],
             "original_question": question,
             "decision_type":     "",
@@ -37,7 +42,21 @@ async def run_full_validation(test_id: str, question: str) -> bool:
             "candidate_trees":   [],
             "decision_tree":     {},
             "tree_reused":       False,
-        })
+        }
+
+        final_tree = None
+        
+        async for chunk in app.astream(inputs, stream_mode="updates"):
+            for node_name, update in chunk.items():
+                if "decision_tree" in update:
+                    final_tree = update["decision_tree"]
+                
+                #print only last tree update
+                if node_name == "calculate_tree" and test_id in WATCH_LIST:
+                    if final_tree:
+                        print(f"\n[FINAL TREE STRUCTURE] Full IF Propagation for {test_id}:")
+                        print(json.dumps(final_tree, indent=2))
+
         print(f"\n✅ TEST CASE {test_id} EXECUTED WITHOUT EXCEPTIONS")
         return True
 

@@ -778,6 +778,49 @@ def process_decision_tree(tree_structure: str) -> str:
     except Exception as e:
         return json.dumps({"error": f"Invalid tree structure: {str(e)}"})
 
+
+@mcp.tool()
+async def geocode_nominatim(address: str, city: str = "", province: str = "") -> dict:
+    """
+    Geocodes an address using the Nominatim OpenStreetMap API.
+    Returns GeoJSON-style result.
+    """
+    query_parts = [address]
+    if city: query_parts.append(city)
+    if province: query_parts.append(province)
+    full_query = ", ".join(query_parts)
+
+    params = {
+        "q": full_query,
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "limit": 1
+    }
+    
+    headers = {
+        "User-Agent": "AgenenticProbabilityEngine",
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://nominatim.openstreetmap.org/search",
+            params=params,
+            headers=headers
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            return {"error": "No results found"}
+
+        result = data[0]
+        return {
+            "lat": float(result["lat"]),
+            "lon": float(result["lon"]),
+            "display_name": result.get("display_name"),
+            "raw": result
+        }
+
 # Snap4City Tools
 
 # Extended from original distance_from_coordinates to support batch input

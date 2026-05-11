@@ -6,8 +6,10 @@ from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from session_store import save_template, load_template, print_templates
+import logging
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
@@ -118,8 +120,8 @@ def make_nodes(model, mcp_client):
             decision_type = "unknown decision"
             variables     = {}
 
-        print(f"\n[Step 1] Decision type: '{decision_type}'")
-        print(f"[Step 1] Variables: {variables}")
+        logger.info(f"\n[Step 1] Decision type: '{decision_type}'")
+        logger.info(f"[Step 1] Variables: {variables}")
 
         update = {
             "decision_type": decision_type,
@@ -127,71 +129,109 @@ def make_nodes(model, mcp_client):
             "tree_reused":   False,
         }
 
+        #FIXME: commented out bc s4c api is down, currently using geocode_nominatim tool
+        # if "address" in variables:
+        #     address  = variables["address"]
+        #     city     = variables.get("city", "")
+        #     province = variables.get("province", "")
+        #     logger.info(f"[Step 1] Geocoding via geocode_with_city: '{address}', city='{city}', province='{province}'")
+        #     try:
+        #         mcp_res = await mcp_client.call_tool(
+        #             "geocode_with_city",
+        #             arguments={
+        #                 "queries": [
+        #                     {
+        #                         "text":       address,
+        #                         "city":       city,
+        #                         "province":   province,
+        #                         "maxresults": 3,
+        #                     }
+        #                 ]
+        #             }
+        #         )
+        #         geo_data = json.loads(mcp_res.content[0].text)
+
+        #         # Top-level error (e.g. server failure)
+        #         top_error = geo_data.get("error")
+        #         if top_error:
+        #             logger.info(f"[Step 1] Geocoding top-level error: {top_error}")
+        #         else:
+        #             # geocode_with_city returns:
+        #             #   {"results": [ {"text":..., "city":..., "results": [<GeoJSON features>], "error":...} ]}
+        #             query_results = geo_data.get("results") or []
+        #             if not query_results:
+        #                 logger.info(f"[Step 1] Geocoding: empty results list")
+        #             else:
+        #                 first_query = query_results[0]
+        #                 item_error  = first_query.get("error")
+        #                 features    = first_query.get("results") or []   # ← GeoJSON feature list
+
+        #                 if item_error:
+        #                     raise ValueError(f"Geocoding tool error: {item_error}")
+        #                 elif not features:
+        #                     raise ValueError(f"Geocoding returned no features for '{address}' in '{city}'")
+        #                 else:
+        #                     # GeoJSON coordinates are [longitude, latitude]
+        #                     coords = features[0].get("geometry", {}).get("coordinates", [])
+        #                     if len(coords) >= 2:
+        #                         variables["lon"] = coords[0]
+        #                         variables["lat"] = coords[1]
+        #                         addr_label = features[0].get("properties", {}).get("address", address)
+        #                         logger.info(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
+        #                     else:
+        #                         raise ValueError(f"Geocoding returned feature with no coordinates for '{address}' in '{city}' — cannot proceed without coordinates.")
+        #     except ValueError:
+        #         raise
+        #     except Exception as e:
+        #         logger.info(f"[Step 1] Geocoding failed: {e}")
+
+        #FIXME: using nominatim bc s4c api is down -> no geocode_with_city
         if "address" in variables:
             address  = variables["address"]
             city     = variables.get("city", "")
             province = variables.get("province", "")
-            print(f"[Step 1] Geocoding via geocode_with_city: '{address}', city='{city}', province='{province}'")
+            logger.info(f"[Step 1] Geocoding via Nominatim: '{address}', '{city}', '{province}'")
             try:
                 mcp_res = await mcp_client.call_tool(
-                    "geocode_with_city",
+                    "geocode_nominatim",
                     arguments={
-                        "queries": [
-                            {
-                                "text":       address,
-                                "city":       city,
-                                "province":   province,
-                                "maxresults": 3,
-                            }
-                        ]
+                        "address":  address,
+                        "city":     city,
+                        "province": province
                     }
                 )
                 geo_data = json.loads(mcp_res.content[0].text)
 
-                # Top-level error (e.g. server failure)
-                top_error = geo_data.get("error")
-                if top_error:
-                    print(f"[Step 1] Geocoding top-level error: {top_error}")
-                else:
-                    # geocode_with_city returns:
-                    #   {"results": [ {"text":..., "city":..., "results": [<GeoJSON features>], "error":...} ]}
-                    query_results = geo_data.get("results") or []
-                    if not query_results:
-                        print(f"[Step 1] Geocoding: empty results list")
-                    else:
-                        first_query = query_results[0]
-                        item_error  = first_query.get("error")
-                        features    = first_query.get("results") or []   # ← GeoJSON feature list
+                if "error" in geo_data:
+                    raise ValueError(f"Nominatim error: {geo_data['error']}")
 
-                        if item_error:
-                            raise ValueError(f"Geocoding tool error: {item_error}")
-                        elif not features:
-                            raise ValueError(f"Geocoding returned no features for '{address}' in '{city}'")
-                        else:
-                            # GeoJSON coordinates are [longitude, latitude]
-                            coords = features[0].get("geometry", {}).get("coordinates", [])
-                            if len(coords) >= 2:
-                                variables["lon"] = coords[0]
-                                variables["lat"] = coords[1]
-                                addr_label = features[0].get("properties", {}).get("address", address)
-                                print(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
-                            else:
-                                raise ValueError(f"Geocoding returned feature with no coordinates for '{address}' in '{city}' — cannot proceed without coordinates.")
-            except ValueError:
+                lat = geo_data.get("lat")
+                lon = geo_data.get("lon")
+                addr_label = geo_data.get("display_name", address)
+
+                if lat is not None and lon is not None:
+                    variables["lat"] = lat
+                    variables["lon"] = lon
+                    logger.info(f"[Step 1] Coordinates found: lat={lat:.6f}, lon={lon:.6f} ({addr_label})")
+                else:
+                    raise ValueError(f"Nominatim returned no coordinates for '{address}'")
+
+            except ValueError as ve:
+                logger.error(f"[Step 1] Geocoding validation failed: {ve}")
                 raise
             except Exception as e:
-                print(f"[Step 1] Geocoding failed: {e}")
+                logger.error(f"[Step 1] Geocoding technical failure: {e}")
 
-        template = load_template(decision_type)
-        if template:
-            print(f"[Step 1] Template found for '{decision_type}' — reusing")
-            injected_tree = inject_variables(template["tree"], variables)
-            update["decision_tree"] = injected_tree
-            update["tree_reused"]   = True
-        else:
-            print(f"[Step 1] No template found for '{decision_type}' — will generate")
+                template = load_template(decision_type)
+                if template:
+                    logger.info(f"[Step 1] Template found for '{decision_type}' — reusing")
+                    injected_tree = inject_variables(template["tree"], variables)
+                    update["decision_tree"] = injected_tree
+                    update["tree_reused"]   = True
+                else:
+                    logger.info(f"[Step 1] No template found for '{decision_type}' — will generate")
 
-        return update
+                return update
 
     # STEP 2: Reword question into search query (first-run only)
     def reword_query(state: AgentState) -> dict:
@@ -204,14 +244,14 @@ def make_nodes(model, mcp_client):
         ))
         response = model.invoke([system, HumanMessage(content=state["original_question"])])
         query = response.content.strip()
-        print(f"\n[Step 2] Reworded query: {query}")
+        logger.info(f"\n[Step 2] Reworded query: {query}")
         return {"search_query": query}
 
     # STEP 3: Global web search (first-run only)
     async def run_search(state: AgentState) -> dict:
         mcp_res = await mcp_client.call_tool("web_search", arguments={"query": state["search_query"]})
         result = mcp_res.content[0].text
-        print(f"\n[Step 3] Search results received ({len(result)} chars)")
+        logger.info(f"\n[Step 3] Search results received ({len(result)} chars)")
         return {"search_results": result}
 
     # STEP 4: Extract parameters with IF triplets (first-run only)
@@ -263,7 +303,7 @@ def make_nodes(model, mcp_client):
                 "reasoning": "Could not parse model output."
             }]
 
-        print(f"\n[Step 4] Extracted {len(parameters)} parameters")
+        logger.info(f"\n[Step 4] Extracted {len(parameters)} parameters")
         return {"parameters": parameters}
 
     # STEP 5a: Generate 3 candidate trees in parallel (first-run only)
@@ -322,22 +362,22 @@ def make_nodes(model, mcp_client):
             try:
                 raw = response.content.strip().replace("```json", "").replace("```", "")
                 tree = json.loads(raw)
-                print(f"\n[Step 5a] Candidate {i+1} generated")
+                logger.info(f"\n[Step 5a] Candidate {i+1} generated")
                 return tree
             except json.JSONDecodeError:
-                print(f"\n[Step 5a] Candidate {i+1} failed to parse")
+                logger.info(f"\n[Step 5a] Candidate {i+1} failed to parse")
                 return None
 
         candidates = await asyncio.gather(*[single_generation(i) for i in range(1)]) # range (3) in production
         candidates = [c for c in candidates if c is not None]
-        print(f"\n[Step 5a] {len(candidates)} valid candidates generated")
+        logger.info(f"\n[Step 5a] {len(candidates)} valid candidates generated")
         return {"candidate_trees": candidates}
 
     # STEP 5b: Pick best candidate tree (first-run only)
     def pick_best_tree(state: AgentState) -> dict:
         candidates = state["candidate_trees"]
         if len(candidates) == 1:
-            print(f"\n[Step 5b] Only 1 candidate generated, using directly")
+            logger.info(f"\n[Step 5b] Only 1 candidate generated, using directly")
             best_tree = candidates[0]
         else:
             system = SystemMessage(content=(
@@ -361,7 +401,7 @@ def make_nodes(model, mcp_client):
             except ValueError:
                 best_index = 0
 
-            print(f"\n[Step 5b] Best tree: candidate {best_index + 1}")
+            logger.info(f"\n[Step 5b] Best tree: candidate {best_index + 1}")
             best_tree = candidates[best_index]
 
         reasoning_map = {
@@ -415,13 +455,13 @@ def make_nodes(model, mcp_client):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             annotated_tree = json.loads(raw)
         except json.JSONDecodeError:
-            print(f"\n[Step 6] Failed to parse annotated tree, using original")
+            logger.info(f"\n[Step 6] Failed to parse annotated tree, using original")
             annotated_tree = state["decision_tree"]
 
         variable_names = list(variables.keys())
 
         save_template(state["decision_type"], variable_names, annotated_tree)
-        print(f"\n[Step 6] Template annotated and saved for '{state['decision_type']}'")
+        logger.info(f"\n[Step 6] Template annotated and saved for '{state['decision_type']}'")
 
         # re-inject variables
         injected_tree = inject_variables(annotated_tree, variables)
@@ -434,7 +474,7 @@ def make_nodes(model, mcp_client):
         variables  = state["variables"]
         has_coords = "lat" in variables and "lon" in variables
 
-        print(f"\n[Step 6.5] Planning scoring strategy for {len(leaves)} leaves...")
+        logger.info(f"\n[Step 6.5] Planning scoring strategy for {len(leaves)} leaves...")
 
         # Fetch macrocategory list once — shared across all leaf planners
         macrocategories: list[str] = []
@@ -443,9 +483,9 @@ def make_nodes(model, mcp_client):
                 macro_res   = await mcp_client.call_tool("get_poi_categories", arguments={})
                 macro_data  = json.loads(macro_res.content[0].text)
                 macrocategories = macro_data.get("results") or macro_data.get("macrocategories") or []
-                print(f"[Step 6.5] Snap4City macrocategories available: {len(macrocategories)}")
+                logger.info(f"[Step 6.5] Snap4City macrocategories available: {len(macrocategories)}")
             except Exception as e:
-                print(f"[Step 6.5] Could not load macrocategories ({e}); all leaves → web_search")
+                logger.info(f"[Step 6.5] Could not load macrocategories ({e}); all leaves → web_search")
 
         loop = asyncio.get_running_loop()
 
@@ -464,7 +504,7 @@ def make_nodes(model, mcp_client):
 
             # ── Phase 1: decide if POI data is relevant + which macrocategory ──
             if not has_coords or not macrocategories:
-                print(f"  [{leaf_label}] → web_search (no coords)")
+                logger.info(f"  [{leaf_label}] → web_search (no coords)")
                 return leaf_id, {"tool": "web_search"}
 
             sys_macro = SystemMessage(content=(
@@ -492,7 +532,7 @@ def make_nodes(model, mcp_client):
             chosen_macro = resp_macro.content.strip().strip('"').strip("'")
 
             if chosen_macro.upper() == "NONE" or chosen_macro not in macrocategories:
-                print(f"  [{leaf_label}] → web_search (no matching macrocategory)")
+                logger.info(f"  [{leaf_label}] → web_search (no matching macrocategory)")
                 return leaf_id, {"tool": "web_search"}
 
             # ── Phase 2: fetch subcategories for the chosen macrocategory ──
@@ -503,7 +543,7 @@ def make_nodes(model, mcp_client):
                 sub_data  = json.loads(sub_res.content[0].text)
                 subcats   = sub_data.get("results") or sub_data.get("categories") or []
             except Exception as e:
-                print(f"  [{leaf_label}] subcats fetch failed ({e}), using macro")
+                logger.info(f"  [{leaf_label}] subcats fetch failed ({e}), using macro")
                 subcats = []
 
             # ── Phase 3: pick closest subcategory (or fall back to macro) ──
@@ -578,10 +618,10 @@ def make_nodes(model, mcp_client):
                 keep_snap4city = False
 
             if not keep_snap4city:
-                print(f"  [{leaf_label}] → web_search ('{resolved_term}' not relevant: {rel_answer})")
+                logger.info(f"  [{leaf_label}] → web_search ('{resolved_term}' not relevant: {rel_answer})")
                 return leaf_id, {"tool": "web_search"}
 
-            print(f"  [{leaf_label}] → snap4city {resolved_type} '{resolved_term}'  [relevance: {rel_answer}]")
+            logger.info(f"  [{leaf_label}] → snap4city {resolved_type} '{resolved_term}'  [relevance: {rel_answer}]")
             return leaf_id, {
                 "tool":            "snap4city",
                 "snap4city_type":  resolved_type,
@@ -607,7 +647,7 @@ def make_nodes(model, mcp_client):
         lat = variables.get("lat")
         lon = variables.get("lon")
 
-        print(f"\n[Step 7] Scoring {len(leaves)} leaves individually...")
+        logger.info(f"\n[Step 7] Scoring {len(leaves)} leaves individually...")
 
         loop = asyncio.get_running_loop()
 
@@ -623,7 +663,7 @@ def make_nodes(model, mcp_client):
             if tool == "snap4city" and lat and lon:
                 s4c_type = strategy.get("snap4city_type", "category")
                 s4c_term = strategy.get("snap4city_cat", leaf_label)
-                print(f"  [{leaf_label}] Snap4City {s4c_type}: '{s4c_term}'")
+                logger.info(f"  [{leaf_label}] Snap4City {s4c_type}: '{s4c_term}'")
 
                 poi_args = {
                     "latitude":    lat,
@@ -641,15 +681,15 @@ def make_nodes(model, mcp_client):
                     poi_data  = json.loads(mcp_res.content[0].text)
                     poi_error = poi_data.get("error")
                     if poi_error:
-                        print(f"    ✗ Snap4City error: {poi_error}, marking neutral")
+                        logger.info(f"    ✗ Snap4City error: {poi_error}, marking neutral")
                         return (leaf_id, 0.0, 1.0, 0.0)
 
                     poi_count = poi_data.get("count") or poi_data.get("fullCount") or len(poi_data.get("results") or [])
                 except Exception as e:
-                    print(f"    ✗ Snap4City call failed ({e}), marking neutral")
+                    logger.info(f"    ✗ Snap4City call failed ({e}), marking neutral")
                     return (leaf_id, 0.0, 1.0, 0.0)
 
-                print(f"    POI count: {poi_count} (threshold={POI_COUNT_THRESHOLD})")
+                logger.info(f"    POI count: {poi_count} (threshold={POI_COUNT_THRESHOLD})")
 
                 # ask LLM if a HIGH count has a positive or negative impact
                 # on the decision to compute the IF triplet accordingly
@@ -685,12 +725,12 @@ def make_nodes(model, mcp_client):
                     n = round((1.0 - u)/2,     4)
                     f = round(1.0-u-n,         4)
 
-                print(f"    polarity={polarity}  favor={f}  neutral={n}  unfavor={u}")
+                logger.info(f"    polarity={polarity}  favor={f}  neutral={n}  unfavor={u}")
                 return (leaf_id, f, n, u)
 
             # ── PATH B: Web search + sentiment analysis ──────────────────────────
             else:
-                print(f"  [{leaf_label}] Web Search...")
+                logger.info(f"  [{leaf_label}] Web Search...")
                 try:
                     mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
                     web_result = mcp_res.content[0].text.strip()
@@ -698,11 +738,11 @@ def make_nodes(model, mcp_client):
                         mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
                         web_result = mcp_res.content[0].text.strip()
                 except Exception as e:
-                    print(f"    ✗ Web search failed ({e}), marking neutral")
+                    logger.info(f"    ✗ Web search failed ({e}), marking neutral")
                     return (leaf_id, 0.0, 1.0, 0.0)
 
                 if not web_result:
-                    print(f"    ✗ Empty web result, marking neutral")
+                    logger.info(f"    ✗ Empty web result, marking neutral")
                     return (leaf_id, 0.0, 1.0, 0.0)
 
                 sys_sent = SystemMessage(content=(
@@ -743,7 +783,7 @@ def make_nodes(model, mcp_client):
                     else:
                         f, n, u = 0.0, 1.0, 0.0
                     reasoning = scored.get("reasoning", "")
-                    print(f"    favor={f}  neutral={n}  unfavor={u}  ← {reasoning}")
+                    logger.info(f"    favor={f}  neutral={n}  unfavor={u}  ← {reasoning}")
                 except Exception:
                     f, n, u = 0.0, 1.0, 0.0
 
@@ -766,10 +806,11 @@ def make_nodes(model, mcp_client):
         )
         calculated = json.loads(result.content[0].text)
         root = calculated
-        print(f"\n[Step 8] IF propagated to root")
-        print(f"         favor={root.get('favor','?')}  "
+        logger.info(f"\n[Step 8] IF propagated to root")
+        logger.info(f"         favor={root.get('favor','?')}  "
               f"neutral={root.get('neutral','?')}  "
               f"unfavor={root.get('unfavor','?')}")
+        # TODO: add a tree visualization here
         return {"decision_tree": calculated}
 
     # STEP 9: Present results
@@ -801,14 +842,14 @@ def make_nodes(model, mcp_client):
         leaves = collect_leaves(tree)
         reused = state.get("tree_reused", False)
 
-        print(f"\n{'='*65}")
-        print(f" LOCATION ANALYSIS — Italian Flag Method")
-        print(f" {state['original_question']}")
-        print(f" {'[template reused]' if reused else '[new template generated]'}")
-        print(f"{'='*65}\n")
+        logger.info(f"\n{'='*65}")
+        logger.info(f" LOCATION ANALYSIS — Italian Flag Method")
+        logger.info(f" {state['original_question']}")
+        logger.info(f" {'[template reused]' if reused else '[new template generated]'}")
+        logger.info(f"{'='*65}\n")
 
-        print(f"  {'PARAMETER':<26}  {'FAV':>5} {'NEU':>5} {'UNF':>5}  FLAG")
-        print(f"  {'-'*61}")
+        logger.info(f"  {'PARAMETER':<26}  {'FAV':>5} {'NEU':>5} {'UNF':>5}  FLAG")
+        logger.info(f"  {'-'*61}")
 
         for leaf in leaves:
             f = leaf.get("favor",   0.0)
@@ -816,19 +857,19 @@ def make_nodes(model, mcp_client):
             u = leaf.get("unfavor", 0.0)
             bar   = if_bar(f, n, u, width=30)
             label = if_label(f, u)
-            print(f"  {leaf['label'][:30]:<30} {f:>5.2f} {n:>5.2f} {u:>5.2f}  {bar}  {label}")
+            logger.info(f"  {leaf['label'][:30]:<30} {f:>5.2f} {n:>5.2f} {u:>5.2f}  {bar}  {label}")
 
         rf = tree.get("favor",   0.0)
         rn = tree.get("neutral", 0.0)
         ru = tree.get("unfavor", 0.0)
 
-        print(f"\n{'='*65}")
-        print(f" DECISION TREE RESULT")
-        print(f"{'='*65}")
-        print(f"\n  Favor: {rf:.4f}  Neutral: {rn:.4f}  Unfavor: {ru:.4f}")
-        print(f"\n  Full flag:  {if_bar(rf, rn, ru, width=50)}")
-        print(f"\n  VERDICT: {if_label(rf, ru)}")
-        print(f"{'='*65}\n")
+        logger.info(f"\n{'='*65}")
+        logger.info(f" DECISION TREE RESULT")
+        logger.info(f"{'='*65}")
+        logger.info(f"\n  Favor: {rf:.4f}  Neutral: {rn:.4f}  Unfavor: {ru:.4f}")
+        logger.info(f"\n  Full flag:  {if_bar(rf, rn, ru, width=50)}")
+        logger.info(f"\n  VERDICT: {if_label(rf, ru)}")
+        logger.info(f"{'='*65}\n")
         return {}
 
     return (
