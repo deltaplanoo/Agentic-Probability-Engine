@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from dotenv import load_dotenv
+from dotenv import load_dotenv, variables
 from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -76,17 +76,12 @@ def update_leaf_scoring_strategy(node: dict, strategies: dict) -> dict:
 
 def make_nodes(model, mcp_client):
 
-    # STEP 1: Parse question — extract decision_type + variables, check DB
+    # STEP 1: Parse question — extract decision_type + variables
     async def parse_question(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a decision analysis expert.\n\n"
             "Given a decision-making question, extract:\n"
-            "1. 'decision_type': the generic decision being made, stripped of all specific "
-            "values. Lowercase short phrase.\n"
-            "   Examples:\n"
-            "   - 'Is opening a restaurant in Via Calzaiuoli 50 Firenze a good idea?' "
-            "→ 'open a restaurant'\n"
-            "   - 'Should I open a gym in Berlin Mitte?' → 'open a gym'\n\n"
+            "1. 'decision_type': the generic decision being made, stripped of all specific values.\n"
             "2. 'variables': a dict of named variable values extracted from the question.\n"
             "   Always include 'address' if a location is mentioned.\n"
             "   Example: 'Via Calzaiuoli 50 a Firenze'\n"
@@ -106,7 +101,7 @@ def make_nodes(model, mcp_client):
             "   - city: 'Roma'\n"
             "   - province: 'Roma'\n"
             "Return ONLY valid JSON in this shape:\n"
-            '{"decision_type": "...", "variables": {"address": "..."}, "city": "...", "province": "..."}\n'
+            '{"decision_type": "...", "variables": {"address": "...", "city": "...", "province": "..."}}\n'
             "No markdown, no explanation."
         ))
         response = model.invoke([system, HumanMessage(content=state["original_question"])])
@@ -115,123 +110,97 @@ def make_nodes(model, mcp_client):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             parsed = json.loads(raw)
             decision_type = parsed.get("decision_type", "").lower().strip()
-            variables     = parsed.get("variables", {})
+            variables = parsed.get("variables", {})
+            for key in ["city", "province"]:
+                if key not in variables and key in parsed:
+                    variables[key] = parsed[key]
+            
+            if "address" in variables:
+                variables["street"] = variables["address"]
+
         except (json.JSONDecodeError, AttributeError):
             decision_type = "unknown decision"
-            variables     = {}
+            variables = {}
 
-        logger.info(f"\n[Step 1] Decision type: '{decision_type}'")
-        logger.info(f"[Step 1] Variables: {variables}")
-
-        update = {
-            "decision_type": decision_type,
-            "variables":     variables,
-            "tree_reused":   False,
-        }
-
-        #FIXME: commented out bc s4c api is down, currently using geocode_nominatim tool
-        # if "address" in variables:
-        #     address  = variables["address"]
-        #     city     = variables.get("city", "")
-        #     province = variables.get("province", "")
-        #     logger.info(f"[Step 1] Geocoding via geocode_with_city: '{address}', city='{city}', province='{province}'")
-        #     try:
-        #         mcp_res = await mcp_client.call_tool(
-        #             "geocode_with_city",
-        #             arguments={
-        #                 "queries": [
-        #                     {
-        #                         "text":       address,
-        #                         "city":       city,
-        #                         "province":   province,
-        #                         "maxresults": 3,
-        #                     }
-        #                 ]
-        #             }
-        #         )
-        #         geo_data = json.loads(mcp_res.content[0].text)
-
-        #         # Top-level error (e.g. server failure)
-        #         top_error = geo_data.get("error")
-        #         if top_error:
-        #             logger.info(f"[Step 1] Geocoding top-level error: {top_error}")
-        #         else:
-        #             # geocode_with_city returns:
-        #             #   {"results": [ {"text":..., "city":..., "results": [<GeoJSON features>], "error":...} ]}
-        #             query_results = geo_data.get("results") or []
-        #             if not query_results:
-        #                 logger.info(f"[Step 1] Geocoding: empty results list")
-        #             else:
-        #                 first_query = query_results[0]
-        #                 item_error  = first_query.get("error")
-        #                 features    = first_query.get("results") or []   # ← GeoJSON feature list
-
-        #                 if item_error:
-        #                     raise ValueError(f"Geocoding tool error: {item_error}")
-        #                 elif not features:
-        #                     raise ValueError(f"Geocoding returned no features for '{address}' in '{city}'")
-        #                 else:
-        #                     # GeoJSON coordinates are [longitude, latitude]
-        #                     coords = features[0].get("geometry", {}).get("coordinates", [])
-        #                     if len(coords) >= 2:
-        #                         variables["lon"] = coords[0]
-        #                         variables["lat"] = coords[1]
-        #                         addr_label = features[0].get("properties", {}).get("address", address)
-        #                         logger.info(f"[Step 1] Coordinates found: lat={coords[1]:.6f}, lon={coords[0]:.6f}  ({addr_label})")
-        #                     else:
-        #                         raise ValueError(f"Geocoding returned feature with no coordinates for '{address}' in '{city}' — cannot proceed without coordinates.")
-        #     except ValueError:
-        #         raise
-        #     except Exception as e:
-        #         logger.info(f"[Step 1] Geocoding failed: {e}")
-
-        #FIXME: using nominatim bc s4c api is down -> no geocode_with_city
         if "address" in variables:
-            address  = variables["address"]
-            city     = variables.get("city", "")
+            address = variables["address"]
+            city = variables.get("city", "")
             province = variables.get("province", "")
-            logger.info(f"[Step 1] Geocoding via Nominatim: '{address}', '{city}', '{province}'")
             try:
                 mcp_res = await mcp_client.call_tool(
-                    "geocode_nominatim",
+                    "geocode_with_city",
                     arguments={
-                        "address":  address,
-                        "city":     city,
-                        "province": province
+                        "queries": [{"text": address, "city": city, "province": province, "maxresults": 3}]
                     }
                 )
                 geo_data = json.loads(mcp_res.content[0].text)
-
-                if "error" in geo_data:
-                    raise ValueError(f"Nominatim error: {geo_data['error']}")
-
-                lat = geo_data.get("lat")
-                lon = geo_data.get("lon")
-                addr_label = geo_data.get("display_name", address)
-
-                if lat is not None and lon is not None:
-                    variables["lat"] = lat
-                    variables["lon"] = lon
-                    logger.info(f"[Step 1] Coordinates found: lat={lat:.6f}, lon={lon:.6f} ({addr_label})")
+                query_results = geo_data.get("results") or []
+                if query_results:
+                    first_query = query_results[0]
+                    item_error  = first_query.get("error")
+                    if item_error:
+                        raise ValueError(f"Geocoding error for '{address}' in '{city}': {item_error}")
+                    features = first_query.get("results") or []
+                    if not features:
+                        raise ValueError(f"Geocoding returned no features for '{address}' in '{city}' — cannot proceed without coordinates.")
+                    coords = features[0].get("geometry", {}).get("coordinates", [])
+                    if len(coords) >= 2:
+                        variables["lon"] = coords[0]
+                        variables["lat"] = coords[1]
+                        logger.info(f"[Step 1] Saved coords: lat={coords[1]}, lon={coords[0]}")
+                    else:
+                        raise ValueError(f"Geocoding returned feature with no coordinates for '{address}' in '{city}'.")
                 else:
-                    raise ValueError(f"Nominatim returned no coordinates for '{address}'")
-
-            except ValueError as ve:
-                logger.error(f"[Step 1] Geocoding validation failed: {ve}")
-                raise
+                    raise ValueError(f"Geocoding returned empty results for '{address}' in '{city}' — cannot proceed without coordinates.")
             except Exception as e:
-                logger.error(f"[Step 1] Geocoding technical failure: {e}")
+                raise ValueError(f"Geocoding failed for {address}. Coordinates are required for location-based decisions.")
 
-                template = load_template(decision_type)
-                if template:
-                    logger.info(f"[Step 1] Template found for '{decision_type}' — reusing")
-                    injected_tree = inject_variables(template["tree"], variables)
-                    update["decision_tree"] = injected_tree
-                    update["tree_reused"]   = True
-                else:
-                    logger.info(f"[Step 1] No template found for '{decision_type}' — will generate")
+        return {
+            "decision_type": decision_type,
+            "variables": variables,
+            "tree_reused": False,
+        }
 
-                return update
+        # if "address" in variables:    # using nominatim bc s4c api is down -> no geocode_with_city
+        #     address  = variables["address"]
+        #     city     = variables.get("city", "")
+        #     province = variables.get("province", "")
+        #     logger.info(f"[Step 1] Geocoding via Nominatim: '{address}', '{city}', '{province}'")
+        #     try:
+        #         mcp_res = await mcp_client.call_tool(
+        #             "geocode_nominatim",
+        #             arguments={
+        #                 "address":  address,
+        #                 "city":     city,
+        #                 "province": province
+        #             }
+        #         )
+        #         geo_data = json.loads(mcp_res.content[0].text)
+        #         if "error" in geo_data:
+        #             raise ValueError(f"Nominatim error: {geo_data['error']}")
+        #         lat = geo_data.get("lat")
+        #         lon = geo_data.get("lon")
+        #         addr_label = geo_data.get("display_name", address)
+        #         if lat is not None and lon is not None:
+        #             variables["lat"] = lat
+        #             variables["lon"] = lon
+        #             logger.info(f"[Step 1] Coordinates found: lat={lat:.6f}, lon={lon:.6f} ({addr_label})")
+        #         else:
+        #             raise ValueError(f"Nominatim returned no coordinates for '{address}'")
+        #     except ValueError as ve:
+        #         logger.error(f"[Step 1] Geocoding validation failed: {ve}")
+        #         raise
+        #     except Exception as e:
+        #         logger.error(f"[Step 1] Geocoding technical failure: {e}")
+        #         template = load_template(decision_type)
+        #         if template:
+        #             logger.info(f"[Step 1] Template found for '{decision_type}' — reusing")
+        #             injected_tree = inject_variables(template["tree"], variables)
+        #             update["decision_tree"] = injected_tree
+        #             update["tree_reused"]   = True
+        #         else:
+        #             logger.info(f"[Step 1] No template found for '{decision_type}' — will generate")
+        #         return update
 
     # STEP 2: Reword question into search query (first-run only)
     def reword_query(state: AgentState) -> dict:
@@ -254,7 +223,7 @@ def make_nodes(model, mcp_client):
         logger.info(f"\n[Step 3] Search results received ({len(result)} chars)")
         return {"search_results": result}
 
-    # STEP 4: Extract parameters with IF triplets (first-run only)
+    # STEP 4: Extract parameters (first-run only)
     def extract_and_score_parameters(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a business location analyst using the Italian Flag (IF) method.\n\n"
@@ -291,9 +260,9 @@ def make_nodes(model, mcp_client):
             raw = response.content.strip().replace("```json", "").replace("```", "")
             parameters = json.loads(raw)
             for p in parameters:
-                p["parameter"] = p["parameter"].replace("\n", " ")
-                p["value"] = p["value"].replace("\n", " ")
-                p["reasoning"] = p["reasoning"].replace("\n", " ")
+                p["parameter"] = (p.get("parameter") or "").replace("\n", " ")
+                p["value"] = (p.get("value") or "").replace("\n", " ")
+                p["reasoning"] = (p.get("reasoning") or "").replace("\n", " ")
 
         except json.JSONDecodeError:
             parameters = [{
@@ -433,8 +402,9 @@ def make_nodes(model, mcp_client):
             "Your job:\n"
             "1. For every LEAF node, write a 'search_hint' — a web search query "
             "that would find data relevant to scoring that leaf.\n"
-            "2. The search_hint MUST be parameterized: replace any specific variable "
-            "values (like a specific address) with their placeholder (e.g. {address}).\n"
+            "2. The search_hint MUST use ONLY these exact placeholder names, matching the keys "
+            "in the variables dict exactly (e.g. if variables has 'address', use {address} — "
+            "never invent names like {street} or {area}).\n"
             "3. Also replace variable values in leaf and group LABELS with placeholders.\n"
             "4. Do NOT touch weights or IF values.\n"
             "5. Do NOT add search_hint to intermediate or root nodes.\n\n"
@@ -501,6 +471,11 @@ def make_nodes(model, mcp_client):
             leaf_id    = leaf["id"]
             leaf_label = leaf["label"]
             hint       = leaf.get("search_hint", leaf_label)
+
+            # FIXME: for debug purposes only
+            # logger.info(f"  Variables: {variables}")
+            # logger.info(f"  has_coords: {has_coords}")
+            # logger.info(f"  Macrocategories: {macrocategories}")
 
             # ── Phase 1: decide if POI data is relevant + which macrocategory ──
             if not has_coords or not macrocategories:
@@ -639,7 +614,7 @@ def make_nodes(model, mcp_client):
     # 2 scoring paths:
     #   - web_search: sentiment analysis on text results
     #   - snap4city:  POI count vs threshold comparison
-    POI_COUNT_THRESHOLD = 10
+    POI_COUNT_THRESHOLD = 7
     async def score_leaf_if(state: AgentState) -> dict:
         tree      = state["decision_tree"]
         leaves    = collect_leaves(tree)

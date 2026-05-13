@@ -4,6 +4,7 @@ from fastmcp import Client
 from langchain_google_genai import ChatGoogleGenerativeAI
 from builder import create_agent_app
 
+logging.basicConfig(level=logging.INFO)
 
 
 def route_after_parse(state: AgentState) -> str:
