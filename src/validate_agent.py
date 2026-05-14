@@ -78,52 +78,58 @@ async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | 
 
 async def main():
     test_suite = [
-        # {
-        #     "id": "TC_01_Address",
-        #     "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?",
-        #     "expect_fail": False,
-        #     "if": "favorable"
-        # },
-        # {
-        #     "id": "TC_02_DifferentAddress",
-        #     "q": "conviene aprire un ristorante in Piazza della Repubblica a Firenze?",
-        #     "expect_fail": False,
-        #     "if": "favorable"
-        # },
-        # {
-        #     "id": "TC_03_DifferentCity",
-        #     "q": "conviene aprire un ristorante in Via Roma 270 a Pontedera, Pisa?",
-        #     "expect_fail": False,
-        #     "if": "uncertain"
-        # },
-        # {
-        #     "id": "TC_04_OtherCategory",
-        #     "q": "conviene aprire un hotel a Firenze in Via Calzaiuoli 50?",
-        #     "expect_fail": False,
-        #     "if": "favorable"
-        # },
-        # {
-        #     "id": "TC_05_POI",
-        #     "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?",
-        #     "expect_fail": False,
-        #     "if": "favorable"
-        # },
         {
-            "id": "TC_06_DifferentSyntax",
+            "id": "TC_01_Address",
+            "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?",
+            "expect_fail": False,
+            "if": "favorable"
+        },
+        {
+            "id": "TC_02_DifferentAddress",
+            "q": "conviene aprire un ristorante in Piazza della Repubblica a Firenze?",
+            "expect_fail": False,
+            "if": "favorable"
+        },
+        {
+            "id": "TC_03_DifferentCity",
+            "q": "conviene aprire un ristorante in Via Roma 270 a Pontedera, Pisa?",
+            "expect_fail": False,
+            "if": "uncertain"
+        },
+        {
+            "id": "TC_04_OtherCategory",
+            "q": "conviene aprire un hotel a Firenze in Via Calzaiuoli 50?",
+            "expect_fail": False,
+            "if": "favorable"
+        },
+        {
+            "id": "TC_04_NonTertiaryCategory",
+            "q": "conviene aprire una raffineria di petrolio a Firenze in Via Calzaiuoli 50?",
+            "expect_fail": False,
+            "if": "unfavorable"
+        },
+        {
+            "id": "TC_05_POI",
+            "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?",
+            "expect_fail": False,
+            "if": "favorable"
+        },
+        {
+            "id": "TC_06_OtherCategoryUnfavorable",
             "q": "sarebbe una buona idea aprire un aquario a Santa Brigida a Pontassieve?",
             "expect_fail": False,
             "if": "unfavorable"
         },
-        # {
-        #     "id": "TC_07_NonExistentAddress",
-        #     "q": "conviene aprire un ristorante in Corso Como 100 a Milano?",
-        #     "expect_fail": True,
-        # },
-        # {
-        #     "id": "TC_08_NonExistentPOI",
-        #     "q": "conviene aprire un ristorante vicino al Colosseo a Roma?",
-        #     "expect_fail": True,
-        # },
+        {
+            "id": "TC_07_NonExistentAddress",
+            "q": "conviene aprire un ristorante in Corso Como 100 a Milano?",
+            "expect_fail": True,
+        },
+        {
+            "id": "TC_08_NonExistentPOI",
+            "q": "conviene aprire un ristorante vicino al Colosseo a Roma?",
+            "expect_fail": True,
+        },
     ]
 
     summary = []
