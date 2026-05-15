@@ -288,6 +288,7 @@ def make_nodes(model, mcp_client):
             "- Leaf nodes = individual parameters\n"
             "- 'weight': importance among siblings (siblings must sum to 1.0)\n"
             "- Leave ALL favor/neutral/unfavor as 0.0 on every node\n"
+            "- In case of competitor nodes, its weight should be less than client volume"
             "- Copy the 'reasoning' field from each parameter onto its corresponding leaf node\n"
             "- Do NOT add search_hint yet — leave it as empty string on leaves\n\n"
             "Use this exact JSON shape:\n"
@@ -802,13 +803,13 @@ def make_nodes(model, mcp_client):
             return f"\033[32m{'█'*g}\033[0m\033[37m{'█'*w}\033[0m\033[31m{'█'*r}\033[0m"
 
         def if_label(favor, unfavor):
-            if favor > unfavor and favor > 0.5:
+            if favor > unfavor and favor > 0.45:
                 return "✅ Favorable"
-            elif unfavor > favor and unfavor > 0.5:
+            elif unfavor > favor and unfavor > 0.45:
                 return "❌ Unfavorable"
-            elif favor > 0.4 and unfavor < 0.2:
+            elif favor > 0.35 and unfavor < 0.15:
                 return "✅ Leaning favorable"
-            elif unfavor > 0.4 and favor < 0.2:
+            elif unfavor > 0.35 and favor < 0.15:
                 return "❌ Leaning unfavorable"
             else:
                 return "⚪ Uncertain"
