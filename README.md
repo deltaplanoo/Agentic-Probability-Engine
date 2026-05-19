@@ -88,5 +88,5 @@ graph TD
 ## To run
 1. Get API keys from Google Gemini, Tavily search and put them inside a `.env` file, naming them `GOOGLE_API_KEY` and `TAVILY_API_KEY`
 2. Install project's dependencies with `pip install -r requirements.txt`
-3. Run FastMCP server with `python server.py`
-4. Run agent with `python agent.py`
+3. Run FastMCP server with `python src/snap4agentic_advisor_experimental.py`
+4. Run agent with `python src/agent.py`
