@@ -1,0 +1,154 @@
+{
+  "id": "root",
+  "label": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?",
+  "weight": 1.0,
+  "favor": 0.5924,
+  "neutral": 0.0976,
+  "unfavor": 0.3101,
+  "children": [
+    {
+      "id": "group_market_potential",
+      "label": "Market Potential",
+      "weight": 0.45,
+      "favor": 0.93,
+      "neutral": 0.07,
+      "unfavor": 0.0,
+      "children": [
+        {
+          "id": "leaf_tourist_foot_traffic",
+          "label": "Tourist foot traffic in Via Calzaiuoli 50",
+          "search_hint": "tourist foot traffic Via Calzaiuoli 50 Firenze",
+          "reasoning": "High tourist foot traffic is essential for attracting a large customer base to a restaurant in a prime location.",
+          "weight": 0.6,
+          "favor": 0.95,
+          "neutral": 0.05,
+          "unfavor": 0.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        },
+        {
+          "id": "leaf_local_demand",
+          "label": "Local demand for dining",
+          "search_hint": "local demand for dining Firenze Firenze",
+          "reasoning": "Strong local demand for dining ensures a receptive market for a new restaurant venture.",
+          "weight": 0.4,
+          "favor": 0.9,
+          "neutral": 0.1,
+          "unfavor": 0.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_financial_viability",
+      "label": "Financial Viability",
+      "weight": 0.25,
+      "favor": 0.2,
+      "neutral": 0.2,
+      "unfavor": 0.6,
+      "children": [
+        {
+          "id": "leaf_commercial_rent",
+          "label": "Average commercial rent in Via Calzaiuoli 50",
+          "search_hint": "commercial rent Via Calzaiuoli 50 Firenze",
+          "reasoning": "Commercial rent is a significant operating cost that directly impacts the financial viability of a restaurant.",
+          "weight": 1.0,
+          "favor": 0.2,
+          "neutral": 0.2,
+          "unfavor": 0.6,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_competition_analysis",
+      "label": "Competition Analysis",
+      "weight": 0.15,
+      "favor": 0.04,
+      "neutral": 0.0,
+      "unfavor": 0.96,
+      "children": [
+        {
+          "id": "leaf_nearby_restaurants",
+          "label": "Number of nearby restaurants",
+          "search_hint": "restaurants near Via Calzaiuoli 50",
+          "reasoning": "The concentration of existing restaurants indicates the competitive landscape and market saturation.",
+          "weight": 0.6,
+          "favor": 0.0,
+          "neutral": 0.0,
+          "unfavor": 1.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "snap4city",
+            "snap4city_type": "category",
+            "snap4city_cat": "Restaurant"
+          }
+        },
+        {
+          "id": "leaf_nearby_high_end_restaurants",
+          "label": "Number of nearby high-end restaurants",
+          "search_hint": "high-end restaurants near Via Calzaiuoli 50",
+          "reasoning": "Identifying the presence of similar high-end competitors helps in strategic positioning and understanding the market segment.",
+          "weight": 0.4,
+          "favor": 0.1,
+          "neutral": 0.0,
+          "unfavor": 0.9,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_location_accessibility",
+      "label": "Location & Accessibility",
+      "weight": 0.15,
+      "favor": 0.7857,
+      "neutral": 0.1071,
+      "unfavor": 0.1071,
+      "children": [
+        {
+          "id": "leaf_public_transport",
+          "label": "Proximity to public transport",
+          "search_hint": "public transport near Via Calzaiuoli 50",
+          "reasoning": "Good access to public transport enhances convenience for both customers and staff, increasing accessibility.",
+          "weight": 0.5,
+          "favor": 1.0,
+          "neutral": 0.0,
+          "unfavor": 0.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "snap4city",
+            "snap4city_type": "macrocategory",
+            "snap4city_cat": "TransferServiceAndRenting"
+          }
+        },
+        {
+          "id": "leaf_nearby_parking",
+          "label": "Availability of nearby parking",
+          "search_hint": "parking near Via Calzaiuoli 50",
+          "reasoning": "Sufficient parking options are important for customers who prefer or need to travel by car.",
+          "weight": 0.5,
+          "favor": 0.5714,
+          "neutral": 0.2143,
+          "unfavor": 0.2143,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "snap4city",
+            "snap4city_type": "category",
+            "snap4city_cat": "Car_park"
+          }
+        }
+      ]
+    }
+  ]
+}

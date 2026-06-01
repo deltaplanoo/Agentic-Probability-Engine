@@ -9,7 +9,9 @@ from session_store import save_template, load_template, print_templates
 import logging
 
 load_dotenv()
+POI_COUNT_THRESHOLD = 7
 logger = logging.getLogger(__name__)
+
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
@@ -202,7 +204,7 @@ def make_nodes(model, mcp_client):
         #             logger.info(f"[Step 1] No template found for '{decision_type}' — will generate")
         #         return update
 
-    # STEP 2: Reword question into search query (first-run only)
+    # STEP 2: Reword question into search query
     def reword_query(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a search query optimizer. "
@@ -216,14 +218,14 @@ def make_nodes(model, mcp_client):
         logger.info(f"\n[Step 2] Reworded query: {query}")
         return {"search_query": query}
 
-    # STEP 3: Global web search (first-run only)
+    # STEP 3: Global web search
     async def run_search(state: AgentState) -> dict:
         mcp_res = await mcp_client.call_tool("web_search", arguments={"query": state["search_query"]})
         result = mcp_res.content[0].text
         logger.info(f"\n[Step 3] Search results received ({len(result)} chars)")
         return {"search_results": result}
 
-    # STEP 4: Extract parameters (first-run only)
+    # STEP 4: Extract parameters
     def extract_and_score_parameters(state: AgentState) -> dict:
         system = SystemMessage(content=(
             "You are a business location analyst using the Italian Flag (IF) method.\n\n"
@@ -275,7 +277,7 @@ def make_nodes(model, mcp_client):
         logger.info(f"\n[Step 4] Extracted {len(parameters)} parameters")
         return {"parameters": parameters}
 
-    # STEP 5a: Generate 3 candidate trees in parallel (first-run only)
+    # STEP 5a: Generate 3 candidate trees in parallel
     async def generate_decision_trees(state: AgentState) -> dict:
         params_json = json.dumps(state["parameters"], indent=2)
 
@@ -473,11 +475,6 @@ def make_nodes(model, mcp_client):
             leaf_label = leaf["label"]
             hint       = leaf.get("search_hint", leaf_label)
 
-            # FIXME: for debug purposes only
-            # logger.info(f"  Variables: {variables}")
-            # logger.info(f"  has_coords: {has_coords}")
-            # logger.info(f"  Macrocategories: {macrocategories}")
-
             # ── Phase 1: decide if POI data is relevant + which macrocategory ──
             if not has_coords or not macrocategories:
                 logger.info(f"  [{leaf_label}] → web_search (no coords)")
@@ -615,7 +612,6 @@ def make_nodes(model, mcp_client):
     # 2 scoring paths:
     #   - web_search: sentiment analysis on text results
     #   - snap4city:  POI count vs threshold comparison
-    POI_COUNT_THRESHOLD = 7
     async def score_leaf_if(state: AgentState) -> dict:
         tree      = state["decision_tree"]
         leaves    = collect_leaves(tree)
@@ -665,7 +661,7 @@ def make_nodes(model, mcp_client):
                     logger.info(f"    ✗ Snap4City call failed ({e}), marking neutral")
                     return (leaf_id, 0.0, 1.0, 0.0)
 
-                logger.info(f"    POI count: {poi_count} (threshold={POI_COUNT_THRESHOLD})")
+                logger.info(f"    POI count: {poi_count}")
 
                 # ask LLM if a HIGH count has a positive or negative impact
                 # on the decision to compute the IF triplet accordingly
@@ -689,7 +685,7 @@ def make_nodes(model, mcp_client):
                 )
                 polarity = resp_ctx.content.strip().upper()
                 is_positive = "POSITIVE" in polarity
-                # ratio: 0.0 = no POIs, 1.0 = at or above threshold
+                # ratio: 0.0 = no POIs; 1.0 = at or above threshold
                 ratio = min(poi_count / POI_COUNT_THRESHOLD, 1.0)
 
                 if is_positive:
@@ -786,7 +782,6 @@ def make_nodes(model, mcp_client):
         logger.info(f"         favor={root.get('favor','?')}  "
               f"neutral={root.get('neutral','?')}  "
               f"unfavor={root.get('unfavor','?')}")
-        # TODO: add a tree visualization here
         return {"decision_tree": calculated}
 
     # STEP 9: Present results

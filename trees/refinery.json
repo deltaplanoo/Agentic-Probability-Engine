@@ -1,0 +1,90 @@
+{
+  "id": "root",
+  "label": "sarebbe una buona idea aprire una raffineria di petrolio a Firenze in Via Calzaiuoli 50?",
+  "weight": 1.0,
+  "favor": 0.0,
+  "neutral": 0.11,
+  "unfavor": 0.89,
+  "children": [
+    {
+      "id": "group_regulatory_environmental_compatibility",
+      "label": "Regulatory & Environmental Compatibility",
+      "weight": 0.55,
+      "favor": 0.0,
+      "neutral": 0.2,
+      "unfavor": 0.8,
+      "children": [
+        {
+          "id": "leaf_industrial_zoning",
+          "label": "Industrial zoning regulations for Via Calzaiuoli 50",
+          "search_hint": "industrial zoning regulations Via Calzaiuoli 50 Firenze",
+          "reasoning": "Zoning laws are fundamental to determining the legality and feasibility of an industrial facility in a specific urban area.",
+          "weight": 0.6,
+          "favor": 0.0,
+          "neutral": 0.0,
+          "unfavor": 1.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        },
+        {
+          "id": "leaf_historic_cultural_significance",
+          "label": "Historic and cultural significance of Via Calzaiuoli 50",
+          "search_hint": "historic cultural significance Via Calzaiuoli 50 Firenze",
+          "reasoning": "The area's historic and cultural value likely imposes strict restrictions on industrial development and could lead to strong public opposition.",
+          "weight": 0.4,
+          "favor": 0.0,
+          "neutral": 0.5,
+          "unfavor": 0.5,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "snap4city",
+            "snap4city_type": "category",
+            "snap4city_cat": "Cultural_sites"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group_urban_context_land_use_conflict",
+      "label": "Urban Context & Land Use Conflict",
+      "weight": 0.45,
+      "favor": 0.0,
+      "neutral": 0.0,
+      "unfavor": 1.0,
+      "children": [
+        {
+          "id": "leaf_number_residential_buildings",
+          "label": "Number of residential buildings near Via Calzaiuoli 50",
+          "search_hint": "residential buildings near Via Calzaiuoli 50 Firenze",
+          "reasoning": "Proximity to residential areas creates significant health, safety, and quality-of-life concerns for an oil refinery, leading to strong public and regulatory resistance.",
+          "weight": 0.6,
+          "favor": 0.0,
+          "neutral": 0.0,
+          "unfavor": 1.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "web_search"
+          }
+        },
+        {
+          "id": "leaf_number_retail_shops",
+          "label": "Number of retail shops near Via Calzaiuoli 50",
+          "search_hint": "retail shops near Via Calzaiuoli 50 Firenze",
+          "reasoning": "A high concentration of retail shops indicates a commercial rather than industrial environment, making an oil refinery incompatible with the existing urban fabric.",
+          "weight": 0.4,
+          "favor": 0.0,
+          "neutral": 0.0,
+          "unfavor": 1.0,
+          "children": [],
+          "scoring_strategy": {
+            "tool": "snap4city",
+            "snap4city_type": "category",
+            "snap4city_cat": "Retail_trade"
+          }
+        }
+      ]
+    }
+  ]
+}

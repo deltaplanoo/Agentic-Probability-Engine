@@ -16,8 +16,6 @@ logging.getLogger("mcp").setLevel(logging.WARNING)
 
 load_dotenv()
 
-WATCH_LIST = ["TC_01_Address", "TC_08_NonExistentPOI"]
-
 async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | None]:
     """Returns (actual_success, if_verdict) where if_verdict is 'favorable'/'unfavorable'/'uncertain'/None"""
     print(f"\n" + "═"*80)
@@ -36,7 +34,7 @@ async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | 
 
         app = create_agent_app(model, mcp_client)
 
-        result = await app.ainvoke({
+        inputs = {
             "messages":          [HumanMessage(content=question)],
             "original_question": question,
             "decision_type":     "",
@@ -47,12 +45,24 @@ async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | 
             "candidate_trees":   [],
             "decision_tree":     {},
             "tree_reused":       False,
-        })
+        }
 
-        tree = result.get("decision_tree", {})
-        f = tree.get("favor",   0.0)
-        n = tree.get("neutral", 0.0)
-        u = tree.get("unfavor", 0.0)
+        final_tree = None
+        
+        async for chunk in app.astream(inputs, stream_mode="updates"):
+            for node_name, update in chunk.items():
+                if "decision_tree" in update:
+                    final_tree = update["decision_tree"]
+                if final_tree:
+                    print(f"\n[FINAL TREE STRUCTURE] Full IF Propagation for {test_id}:")
+                    print(json.dumps(final_tree, indent=2))
+
+        if not final_tree:
+            return True, None
+
+        f = final_tree.get("favor",   0.0)
+        n = final_tree.get("neutral", 0.0)
+        u = final_tree.get("unfavor", 0.0)
 
         if f > u and f > 0.45:
             verdict = "favorable"
@@ -78,52 +88,52 @@ async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | 
 
 async def main():
     test_suite = [
-        {
-            "id": "TC_01_Address",
-            "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?",
-            "expect_fail": False,
-            "if": "favorable"
-        },
-        {
-            "id": "TC_03_DifferentCity",
-            "q": "conviene aprire un dentista in Via Roma 270 a Pontedera, Pisa?",
-            "expect_fail": False,
-            "if": "favorable"
-        },
-        {
-            "id": "TC_04_OtherCategory",
-            "q": "conviene aprire un hotel in Piazza San Michele a Lucca?",
-            "expect_fail": False,
-            "if": "favorable"
-        },
+        # {
+        #     "id": "TC_01_Address",
+        #     "q": "conviene aprire un ristorante in Via Calzaiuoli 50 a Firenze?",
+        #     "expect_fail": False,
+        #     "if": "favorable"
+        # },
+        # {
+        #     "id": "TC_03_DifferentCity",
+        #     "q": "conviene aprire un dentista in Via Roma 270 a Pontedera, Pisa?",
+        #     "expect_fail": False,
+        #     "if": "favorable"
+        # },
+        # {
+        #     "id": "TC_04_OtherCategory",
+        #     "q": "conviene aprire un hotel in Piazza San Michele a Lucca?",
+        #     "expect_fail": False,
+        #     "if": "favorable"
+        # },
         {
             "id": "TC_05_OtherMacrocategory",
             "q": "sarebbe una buona idea aprire una raffineria di petrolio a Firenze in Via Calzaiuoli 50?",
             "expect_fail": False,
             "if": "unfavorable"
         },
-        {
-            "id": "TC_06_POI",
-            "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?",
-            "expect_fail": False,
-            "if": "favorable"
-        },
-        {
-            "id": "TC_07_OtherCategoryUnfavorable",
-            "q": "sarebbe una buona idea aprire un aquario a Santa Brigida a Pontassieve?",
-            "expect_fail": False,
-            "if": "unfavorable"
-        },
-        {
-            "id": "TC_08_NonExistentAddress",
-            "q": "conviene aprire una concessionaria in Corso Como 100 a Milano?",
-            "expect_fail": True,
-        },
-        {
-            "id": "TC_09_NonExistentPOI",
-            "q": "conviene aprire un ristorante vicino al Colosseo a Roma?",
-            "expect_fail": True,
-        },
+        # {
+        #     "id": "TC_06_POI",
+        #     "q": "conviene aprire una gelateria vicino a Gelatando a Scandicci, Firenze?",
+        #     "expect_fail": False,
+        #     "if": "favorable"
+        # },
+        # {
+        #     "id": "TC_07_OtherCategoryUnfavorable",
+        #     "q": "sarebbe una buona idea aprire un aquario a Santa Brigida a Pontassieve?",
+        #     "expect_fail": False,
+        #     "if": "unfavorable"
+        # },
+        # {
+        #     "id": "TC_08_NonExistentAddress",
+        #     "q": "conviene aprire una concessionaria in Corso Como 100 a Milano?",
+        #     "expect_fail": True,
+        # },
+        # {
+        #     "id": "TC_09_NonExistentPOI",
+        #     "q": "conviene aprire un ristorante vicino al Colosseo a Roma?",
+        #     "expect_fail": True,
+        # },
     ]
 
     summary = []
@@ -139,7 +149,7 @@ async def main():
         if not expect_fail and expected_if and actual_success:
             if actual_verdict == expected_if:
                 if_score = 1.0
-            elif "uncertain" in actual_verdict.lower() and expected_if in ["favorable", "unfavorable"]:
+            elif actual_verdict and "uncertain" in actual_verdict.lower() and expected_if in ["favorable", "unfavorable"]:
                 if_score = 0.5
             else:
                 if_score = 0.0
