@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 from tavily import TavilyClient
 
 load_dotenv()
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 
 
 # ######## Autentication ########
@@ -162,8 +163,6 @@ def _read_iot_filters_map() -> dict:
 # -----------------------------------------------------------------------------------------
 
 mcp = FastMCP("snap4Agentic_Advisor_experimental") #, auth = auth
-
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 @mcp.tool(name="get_region_boundary", tags={"locator"}, meta={"tags": ["locator"]})
 def get_region_boundary(
@@ -710,30 +709,44 @@ def web_search(query: str) -> str:
     """
     print(f"[LOG SERVER] Searching key factors for decision: {query}")
     extended_query = f"Fattori per decidere: {query}"
-
+    
     try:
-        response = tavily.search(
-            query=extended_query, 
-            search_depth="basic", 
-            max_results=10,
-            include_answer=True
+        response = httpx.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={
+                "key": GOOGLE_API_KEY,
+                "cx": GOOGLE_CSE_ID,
+                "q": extended_query,
+                "num": 10,
+                "hl": "it",
+            },
+            timeout=15.0,
         )
-        
-        results = response.get("results", [])
+        response.raise_for_status()
+        data = response.json()
+
+        print("=" * 50)
+        print(f"[LOG SERVER] Google Search API response: {data}")
+        print("=" * 50)
+
+        results = data.get("items", [])
         if not results:
             return "No results found."
 
-        formatted_output = f"Tavily answer: {response.get('answer', 'N/A')}\n\n"
+        search_info = data.get("searchInformation", {})
+        total = search_info.get("formattedTotalResults", "N/A")
+        formatted_output = f"Google answer: {total} total results found\n\n"
         formatted_output += "Detailed results:\n"
-        
+
         for i, r in enumerate(results, 1):
-            # Tavily returns 'content' of webpage
-            formatted_output += f"{i}. {r['title']}\n   Content: {r['content'][:300]}...\n\n"
-            
+            # google returns snippet
+            snippet = r.get("snippet", "No snippet available")
+            formatted_output += f"{i}. {r['title']}\n   Content: {snippet[:300]}...\n\n"
+
         return formatted_output
 
     except Exception as e:
-        return f"Error during Tavily search: {str(e)}"
+        return f"Error during Google search: {str(e)}"
 
 @mcp.tool()
 def process_decision_tree(tree_structure: str) -> str:

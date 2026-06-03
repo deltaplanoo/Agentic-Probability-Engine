@@ -46,7 +46,6 @@ async def run_full_validation(test_id: str, question: str) -> tuple[bool, str | 
             "parameters":        [],
             "candidate_trees":   [],
             "decision_tree":     {},
-            "tree_reused":       False,
         })
 
         tree = result.get("decision_tree", {})

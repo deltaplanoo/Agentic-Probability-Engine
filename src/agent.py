@@ -1,14 +1,13 @@
 import os
+import asyncio
+import logging
 from nodes import *
 from fastmcp import Client
 from langchain_google_genai import ChatGoogleGenerativeAI
 from builder import create_agent_app
+from langchain_core.messages import HumanMessage
 
 logging.basicConfig(level=logging.INFO)
-
-
-def route_after_parse(state: AgentState) -> str:
-    return "plan_leaf_scoring" if state.get("tree_reused") else "reword_query"
 
 async def run_agent(question: str):
 
@@ -33,7 +32,6 @@ async def run_agent(question: str):
             "parameters":        [],
             "candidate_trees":   [],
             "decision_tree":     {},
-            "tree_reused":       False,
         })
 
     finally:

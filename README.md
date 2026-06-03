@@ -4,32 +4,25 @@ Data-driven probability assestment agent.
 ```mermaid
 graph TD
     %% Entry Point
-    Start((User Question)) --> Parse[<b>Step 1: Parse Question</b><br/>Extract Decision Type & Variables<br/><i>Geocoding with Nominatim</i>]
+    Start((User Question)) --> Parse[<b>Step 1: Parse Question</b><br/>Extract Decision Type & Variables<br/><i>Geocoding</i>]
     
-    %% Routing logic
-    Parse --> CheckDB{Template in DB?}
-    %% Path A: Reusing Template
-    CheckDB -- Yes --> Inject[<b>Step 6b: Inject Variables</b><br/>Replace placeholders in template]
-    Inject --> Score
-
-    %% Path B: New Template Generation
-    CheckDB -- No --> Reword[<b>Step 2: Reword Query</b><br/>Optimize for Global Search]
+    Parse --> Reword[<b>Step 2: Reword Query</b><br/>Optimize for Global Search]
     Reword --> GlobalSearch[<b>Step 3: Global Web Search</b><br/>Tavily API]
     GlobalSearch --> ExtractParams[<b>Step 4: Extract Parameters</b><br/>Identify key decision factors]
 
     subgraph Parallel_Generation [Tree Generation]
-        ExtractParams --> GenTrees[<b>Step 5a: Generate 3 Candidates</b><br/>Parallel LLM Generation]
+        ExtractParams --> GenTrees[<b>Step 5a: Generate Candidate</b><br/>LLM Generation]
         GenTrees --> PickBest[<b>Step 5b: Pick Best Tree</b><br/>Selection by coverage/weights]
     end
     
-    PickBest --> Annotate[<b>Step 6a: Annotate & Save</b><br/>Add Search Hints & Save to SQLite]
-    Annotate --> Score
+    PickBest --> PlanScoring[<b>Step 6: Plan Leaf Scoring</b><br/>Choose between POI count or Web search]
+    PlanScoring --> Score
 
     %% Core Scoring Logic
     subgraph Leaf_Scoring [Targeted Leaf Scoring]
         Score[<b>Step 7: Score Leaf IF</b><br/>Process each leaf in parallel]
         Score --> Choice{Tool Choice?}
-        Choice -- POI Category --> POITool[<b>Km4City API Tool</b><br/>Physical Proximity & Services]
+        Choice -- POI Category --> POITool[<b>Snap4City API Tool</b><br/>Physical Proximity & Services]
         Choice -- Contextual --> WebTool[<b>Web Search Tool</b><br/>Market Trends & Regulations]
         POITool --> AggResults[Assign IF Triplet]
         WebTool --> AggResults
@@ -41,7 +34,6 @@ graph TD
     Display --> End((Final Decision))
     
     %% Styling
-    style CheckDB fill:#535,stroke:#ccc,stroke-width:2px
     style Choice fill:#535,stroke:#ccc,stroke-width:2px
     style Parallel_Generation fill:#345,stroke:#ccc
     style Leaf_Scoring fill:#543,stroke:#ccc
@@ -55,7 +47,7 @@ Example: "Is opening a restaurant in Via Calzaiuoli 50 in Florence a good idea?"
 ```mermaid
 graph TD
     %% Root Node
-    root["<b>Root:</b> Is opening a restaurant in {address} a good idea?<br/><i>(Weight: 1.0)</i>"]
+    root["<b>Root:</b> Is opening a restaurant in Via Calzaiuoli 50, Firenze a good idea?<br/><i>(Weight: 1.0)</i>"]
 
     %% Group 1: Location & Market
     root --> group_loc["<b>Group:</b> Location & Market Potential<br/><i>(Weight: 0.5)</i>"]
@@ -72,7 +64,7 @@ graph TD
 
     %% Group 3: Challenges & Competition
     root --> group_chal["<b>Group:</b> Potential Challenges & Competition<br/><i>(Weight: 0.2)</i>"]
-    group_chal --> leaf_comp["<b>Leaf:</b> Existing Competition at {address}<br/><i>(Weight: 0.6)</i>"]
+    group_chal --> leaf_comp["<b>Leaf:</b> Existing Competition<br/><i>(Weight: 0.6)</i>"]
     group_chal --> leaf_tourism_impact["<b>Leaf:</b> Impact of Mass Tourism on Identity<br/><i>(Weight: 0.4)</i>"]
 
     %% Styling

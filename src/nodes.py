@@ -5,7 +5,6 @@ from dotenv import load_dotenv, variables
 from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from session_store import save_template, load_template, print_templates
 import logging
 
 load_dotenv()
@@ -23,20 +22,8 @@ class AgentState(TypedDict):
     parameters:        list[dict]
     candidate_trees:   list[dict]
     decision_tree:     dict
-    tree_reused:       bool
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def inject_variables(node: dict, variables: dict) -> dict:
-    """Recursively replace {variable} placeholders in all label and search_hint fields."""
-    node = dict(node)
-    for key in ("label", "search_hint"):
-        if key in node and isinstance(node[key], str):
-            for var_name, var_value in variables.items():
-                node[key] = node[key].replace(f"{{{var_name}}}", str(var_value))
-    
-    node["children"] = [inject_variables(c, variables) for c in node.get("children", [])]
-    return node
 
 def collect_leaves(node: dict) -> list[dict]:
     if not node.get("children"):
@@ -158,49 +145,7 @@ def make_nodes(model, mcp_client):
         return {
             "decision_type": decision_type,
             "variables": variables,
-            "tree_reused": False,
         }
-
-        # if "address" in variables:    # using nominatim bc s4c api is down -> no geocode_with_city
-        #     address  = variables["address"]
-        #     city     = variables.get("city", "")
-        #     province = variables.get("province", "")
-        #     logger.info(f"[Step 1] Geocoding via Nominatim: '{address}', '{city}', '{province}'")
-        #     try:
-        #         mcp_res = await mcp_client.call_tool(
-        #             "geocode_nominatim",
-        #             arguments={
-        #                 "address":  address,
-        #                 "city":     city,
-        #                 "province": province
-        #             }
-        #         )
-        #         geo_data = json.loads(mcp_res.content[0].text)
-        #         if "error" in geo_data:
-        #             raise ValueError(f"Nominatim error: {geo_data['error']}")
-        #         lat = geo_data.get("lat")
-        #         lon = geo_data.get("lon")
-        #         addr_label = geo_data.get("display_name", address)
-        #         if lat is not None and lon is not None:
-        #             variables["lat"] = lat
-        #             variables["lon"] = lon
-        #             logger.info(f"[Step 1] Coordinates found: lat={lat:.6f}, lon={lon:.6f} ({addr_label})")
-        #         else:
-        #             raise ValueError(f"Nominatim returned no coordinates for '{address}'")
-        #     except ValueError as ve:
-        #         logger.error(f"[Step 1] Geocoding validation failed: {ve}")
-        #         raise
-        #     except Exception as e:
-        #         logger.error(f"[Step 1] Geocoding technical failure: {e}")
-        #         template = load_template(decision_type)
-        #         if template:
-        #             logger.info(f"[Step 1] Template found for '{decision_type}' — reusing")
-        #             injected_tree = inject_variables(template["tree"], variables)
-        #             update["decision_tree"] = injected_tree
-        #             update["tree_reused"]   = True
-        #         else:
-        #             logger.info(f"[Step 1] No template found for '{decision_type}' — will generate")
-        #         return update
 
     # STEP 2: Reword question into search query (first-run only)
     def reword_query(state: AgentState) -> dict:
@@ -290,7 +235,7 @@ def make_nodes(model, mcp_client):
             "- Leave ALL favor/neutral/unfavor as 0.0 on every node\n"
             "- In case of competitor nodes, its weight should be less than client volume"
             "- Copy the 'reasoning' field from each parameter onto its corresponding leaf node\n"
-            "- Do NOT add search_hint yet — leave it as empty string on leaves\n\n"
+            "- 'search_hint': a concise web search query to score this leaf (e.g. 'restaurants near [Address/City]')\n\n"
             "Use this exact JSON shape:\n"
             "{\n"
             '  "id": "root",\n'
@@ -392,52 +337,6 @@ def make_nodes(model, mcp_client):
         best_tree_with_reasoning = stamp_reasoning(best_tree)
         return {"decision_tree": best_tree_with_reasoning}
     
-    # STEP 6: Annotate leaves with parameterized search_hints, then save template
-    def annotate_and_save_template(state: AgentState) -> dict:
-        tree_json = json.dumps(state["decision_tree"], indent=2)
-        variables = state["variables"]
-
-        system = SystemMessage(content=(
-            "You are a decision analysis expert.\n\n"
-            "You will receive a decision tree and a variables dict.\n\n"
-            "Your job:\n"
-            "1. For every LEAF node, write a 'search_hint' — a web search query "
-            "that would find data relevant to scoring that leaf.\n"
-            "2. The search_hint MUST use ONLY these exact placeholder names, matching the keys "
-            "in the variables dict exactly (e.g. if variables has 'address', use {address} — "
-            "never invent names like {street} or {area}).\n"
-            "3. Also replace variable values in leaf and group LABELS with placeholders.\n"
-            "4. Do NOT touch weights or IF values.\n"
-            "5. Do NOT add search_hint to intermediate or root nodes.\n\n"
-            "Examples of correct search_hints:\n"
-            "  Leaf 'Foot Traffic': search_hint = 'pedestrian foot traffic {address}'\n"
-            "  Leaf 'Restaurant competition': search_hint = 'restaurants near {address}'\n"
-            "  Leaf 'Parking': search_hint = 'parking availability near {address}'\n"
-            "  Leaf 'Rent': search_hint = 'commercial rent {address}'\n\n"
-            "Return the complete updated tree as ONLY valid JSON. No markdown, no explanation."
-        ))
-        human = HumanMessage(content=(
-            f"Variables: {json.dumps(variables)}\n\n"
-            f"Tree:\n{tree_json}"
-        ))
-        response = model.invoke([system, human])
-
-        try:
-            raw = response.content.strip().replace("```json", "").replace("```", "")
-            annotated_tree = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.info(f"\n[Step 6] Failed to parse annotated tree, using original")
-            annotated_tree = state["decision_tree"]
-
-        variable_names = list(variables.keys())
-
-        save_template(state["decision_type"], variable_names, annotated_tree)
-        logger.info(f"\n[Step 6] Template annotated and saved for '{state['decision_type']}'")
-
-        # re-inject variables
-        injected_tree = inject_variables(annotated_tree, variables)
-        return {"decision_tree": injected_tree}
-
     # STEP 6.5: For each leaf, explore Snap4City categories via MCP to decide the scoring tool
     async def plan_leaf_scoring(state: AgentState) -> dict:
         tree       = state["decision_tree"]
@@ -816,12 +715,10 @@ def make_nodes(model, mcp_client):
 
         tree   = state["decision_tree"]
         leaves = collect_leaves(tree)
-        reused = state.get("tree_reused", False)
 
         logger.info(f"\n{'='*65}")
         logger.info(f" LOCATION ANALYSIS — Italian Flag Method")
         logger.info(f" {state['original_question']}")
-        logger.info(f" {'[template reused]' if reused else '[new template generated]'}")
         logger.info(f"{'='*65}\n")
 
         logger.info(f"  {'PARAMETER':<26}  {'FAV':>5} {'NEU':>5} {'UNF':>5}  FLAG")
@@ -855,7 +752,6 @@ def make_nodes(model, mcp_client):
         extract_and_score_parameters,
         generate_decision_trees,
         pick_best_tree,
-        annotate_and_save_template,
         plan_leaf_scoring,
         score_leaf_if,
         calculate_tree,
