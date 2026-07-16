@@ -14,7 +14,7 @@ graph TD
 
     %% Path B: New Template Generation
     CheckDB -- No --> Reword[<b>Step 2: Reword Query</b><br/>Optimize for Global Search]
-    Reword --> GlobalSearch[<b>Step 3: Global Web Search</b><br/>Tavily API]
+    Reword --> GlobalSearch[<b>Step 3: Global Web Search</b><br/>Gemini Google Search grounding]
     GlobalSearch --> ExtractParams[<b>Step 4: Extract Parameters</b><br/>Identify key decision factors]
 
     subgraph Parallel_Generation [Tree Generation]
@@ -30,7 +30,7 @@ graph TD
         Score[<b>Step 7: Score Leaf IF</b><br/>Process each leaf in parallel]
         Score --> Choice{Tool Choice?}
         Choice -- POI Category --> POITool[<b>Km4City API Tool</b><br/>Physical Proximity & Services]
-        Choice -- Contextual --> WebTool[<b>Web Search Tool</b><br/>Market Trends & Regulations]
+        Choice -- Contextual --> WebTool[<b>Web Search Tool</b><br/>Gemini Google Search grounding — Market Trends & Regulations]
         POITool --> AggResults[Assign IF Triplet]
         WebTool --> AggResults
     end
@@ -86,7 +86,7 @@ graph TD
 ```
 
 ## To run
-1. Get API keys from Google Gemini, Tavily search and put them inside a `.env` file, naming them `GOOGLE_API_KEY` and `TAVILY_API_KEY`
+1. Get a Google Gemini API key and put it inside a `.env` file, naming it `GOOGLE_API_KEY` (see `.env.example`). Optionally set `GEMINI_SEARCH_MODEL` and `WEB_SEARCH_MAX_CONCURRENCY` to override the defaults used by the `web_search` tool.
 2. Install project's dependencies with `pip install -r requirements.txt`
-3. Run FastMCP server with `python server.py`
-4. Run agent with `python agent.py`
+3. Run FastMCP server with `python src/snap4agentic_advisor_experimental.py`
+4. Run agent with `python src/agent.py`

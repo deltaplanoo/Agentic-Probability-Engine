@@ -13,11 +13,9 @@ import asyncio
 import os
 from enum import Enum
 from dotenv import load_dotenv
-from tavily import TavilyClient
 from custom_tools import register_tools     # old server's tools
 
 load_dotenv()
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 
 # ######## Autentication ########
@@ -164,7 +162,7 @@ def _read_iot_filters_map() -> dict:
 
 mcp = FastMCP("snap4Agentic_Advisor_experimental") #, auth = auth
 
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
+register_tools(mcp)
 
 @mcp.tool(name="get_region_boundary", tags={"locator"}, meta={"tags": ["locator"]})
 def get_region_boundary(
