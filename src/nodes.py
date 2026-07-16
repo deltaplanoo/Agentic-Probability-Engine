@@ -33,6 +33,50 @@ def collect_leaves(node: dict) -> list[dict]:
         leaves.extend(collect_leaves(child))
     return leaves
 
+class WebSearchResultError(RuntimeError):
+    """Raised when the web_search MCP tool returned an error or no usable answer."""
+    pass
+
+def format_web_search_result(raw_result: str) -> str:
+    """Parse the web_search MCP tool's JSON payload into a readable evidence
+    packet for the next LLM step. Raises WebSearchResultError on a structured
+    error or a missing/blank answer, so callers never mistake an error for
+    evidence. Falls back to returning legacy plain-text responses unchanged."""
+    try:
+        data = json.loads(raw_result)
+    except (TypeError, ValueError):
+        if raw_result and raw_result.strip():
+            return raw_result
+        raise WebSearchResultError("Empty web search response")
+
+    if not isinstance(data, dict):
+        if raw_result and raw_result.strip():
+            return raw_result
+        raise WebSearchResultError("Empty web search response")
+
+    if data.get("error"):
+        raise WebSearchResultError(str(data["error"]))
+
+    answer = str(data.get("answer") or "").strip()
+    if not answer:
+        raise WebSearchResultError("Web search returned no usable answer")
+
+    lines = [answer]
+
+    search_queries = data.get("search_queries") or []
+    if search_queries:
+        lines.append("\nSearch queries executed: " + "; ".join(search_queries))
+
+    sources = data.get("sources") or []
+    if sources:
+        lines.append("\nSources:")
+        for i, source in enumerate(sources, 1):
+            title = source.get("title") or source.get("url") or "source"
+            url = source.get("url", "")
+            lines.append(f"  {i}. {title} ({url})")
+
+    return "\n".join(lines)
+
 def update_leaf_in_tree(node: dict, leaf_id: str, favor: float, neutral: float, unfavor: float) -> dict:
     """Return a new tree with IF values updated on the matching leaf."""
     node = dict(node)
@@ -163,9 +207,13 @@ def make_nodes(model, mcp_client):
 
     # STEP 3: Global web search (first-run only)
     async def run_search(state: AgentState) -> dict:
-        mcp_res = await mcp_client.call_tool("web_search", arguments={"query": state["search_query"]})
-        result = mcp_res.content[0].text
-        logger.info(f"\n[Step 3] Search results received ({len(result)} chars)")
+        try:
+            mcp_res = await mcp_client.call_tool("web_search", arguments={"query": state["search_query"]})
+            result = format_web_search_result(mcp_res.content[0].text)
+            print(f"\n[Step 3] Search results received ({len(result)} chars)")
+        except Exception as e:
+            print(f"\n[Step 3] Web search failed ({e})")
+            result = "No reliable global web evidence was available. Do not infer facts from this message."
         return {"search_results": result}
 
     # STEP 4: Extract parameters (first-run only)
@@ -608,17 +656,15 @@ def make_nodes(model, mcp_client):
                 logger.info(f"  [{leaf_label}] Web Search...")
                 try:
                     mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
-                    web_result = mcp_res.content[0].text.strip()
-                    if not web_result or "timed out" in web_result.lower():
-                        mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
-                        web_result = mcp_res.content[0].text.strip()
+                    web_result = format_web_search_result(mcp_res.content[0].text.strip())
                 except Exception as e:
-                    logger.info(f"    ✗ Web search failed ({e}), marking neutral")
-                    return (leaf_id, 0.0, 1.0, 0.0)
-
-                if not web_result:
-                    logger.info(f"    ✗ Empty web result, marking neutral")
-                    return (leaf_id, 0.0, 1.0, 0.0)
+                    print(f"    Web search attempt failed ({e}), retrying")
+                    try:
+                        mcp_res    = await mcp_client.call_tool("web_search", arguments={"query": hint})
+                        web_result = format_web_search_result(mcp_res.content[0].text.strip())
+                    except Exception as e2:
+                        print(f"    ✗ Web search failed ({e2}), marking neutral")
+                        return (leaf_id, 0.0, 1.0, 0.0)
 
                 sys_sent = SystemMessage(content=(
                     "You are a business analyst using the Italian Flag (IF) method.\n\n"
