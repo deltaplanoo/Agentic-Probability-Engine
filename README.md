@@ -89,3 +89,5 @@ graph TD
 2. Install project's dependencies with `pip install -r requirements.txt`
 3. Run FastMCP server with `python src/snap4agentic_advisor_experimental.py`
 4. Run agent with `python src/agent.py`
+
+Or, to start both with a single command: `./run.sh` (starts the server, waits until it's ready, runs the agent, and stops the server when the agent exits).
